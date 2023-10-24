@@ -3,6 +3,8 @@ from safe_rl_envs.utils.mjx_device import device_put
 
 env = Engine()
 obs = env.reset()
+
+#test
 # import jax
 # from jax import numpy as jp
 # import mujoco
