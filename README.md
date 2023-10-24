@@ -1,2 +1,2 @@
 # guardX
-The upgraded version of GUARD environment, the RL training is empowered with GPU parallelization, where RL agent can be trained with several minutes
+In the enhanced GUARD environment, RL training benefits from the power of GPU parallelization, enabling the training of RL agents in a matter of minutes.
