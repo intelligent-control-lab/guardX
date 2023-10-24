@@ -168,7 +168,6 @@ class Engine(gym.Env, gym.utils.EzPickle):
         return obs, reward, done, info, data
     
     def _get_obs(self, data: mjx.Data, last_data: mjx.Data, last_last_data: mjx.Data) -> jp.ndarray:
-        #TODO: Weiye
         # get the raw position data of different objects current frame 
         robot_pos = data.xpos[self.body_name2id['robot'],:]
         robot_mat = data.xmat[self.body_name2id['robot'],:,:]
@@ -280,8 +279,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         obs = jp.concatenate([jpos, jvel, jacc, vel_vec, acc_vec, hazards_lidar, goal_lidar])
         return obs
 
-    def _get_reward_done(self, data: mjx.Data, last_dist_goal: mjx.Data) -> Tuple[jp.ndarray, jp.bool]:
-        #TODO: Weiye        
+    def _get_reward_done(self, data: mjx.Data, last_dist_goal: mjx.Data) -> Tuple[jp.ndarray, jp.bool]:        
         # get raw data of robot pos and goal pos
         robot_pos = data.xpos[self.body_name2idx['robot'],:]
         goal_pos = data.xpos[self.body_name2id['goal'],:]
