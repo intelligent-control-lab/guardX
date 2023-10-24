@@ -1,19 +1,9 @@
 #!/usr/bin/env python
-
-import gym
-import gym.spaces
 import numpy as np
-from PIL import Image
-from copy import deepcopy
-from collections import OrderedDict
-# import mujoco_py
-# from mujoco_py import MjViewer, MujocoException, const, MjRenderContextOffscreen
+import jax
+from jax import numpy as jp
+from typing import Tuple
 
-from safe_rl_envs.envs.world import World, Robot
-import mujoco
-
-import sys
-from .engine_utils import *
 
 
 # Distinct colors for different types of objects.
@@ -86,9 +76,19 @@ class Engine(gym.Env, gym.utils.EzPickle):
         # can't find it anywhere else, it's probably set via the config dict
         # and this parse function.
         # TODO:comment this
-        self.body_name2id = {}
+        self.body_name2id = {} # TODO: add robot dictionary
+        self.joint_name2id = {} # TODO: add joint dictionary 
         self.hazards_size = 0.3
         self.goal_size = 0.5
+        self.timestep = 0.002 # TODO: add timestep from xml file 
+        
+        # TODO: standardize the configuration 
+        self.reward_distance = 1.
+        self.lidar_num_bins = 16
+        self.lidar_max_dist=None 
+        self.lidar_exp_gain = 1.0
+        self.lidar_alias = True
+        
         
     @property
     def model(self):
@@ -143,69 +143,62 @@ class Engine(gym.Env, gym.utils.EzPickle):
     def dist_goal(self):
         pass
 
-    def cost(self):
-        #TODO: Weiye
-        pass
-    
-    def done(self):
-        #TODO: Weiye
-        pass
-
-    def goal_met(self):
-        #TODO: Weiye
-        pass
-    
     def step(self, action):
         pass
     
-    def mjx_step(self, data: mjx.Data, action: jp.ndarray):
+    def mjx_step(self, data: mjx.Data, 
+                 last_data: mjx.Data, 
+                 last_last_data: mjx.Data, 
+                 last_dist_goal: mjx.Data,
+                 action: jp.ndarray):
+        #! TODO: be able to send the last data and last last data and last dist goal 
         """Runs one timestep of the environment's dynamics."""
         def f(data, _):
-        data = data.replace(ctrl=action)
-        return (
-            mjx.step(self.mjx_model, data),
-            None,
-        )
+            data = data.replace(ctrl=action)
+            return (
+                mjx.step(self.mjx_model, data),
+                None,
+            )
         data, _ = jax.lax.scan(f, data, (), self._physics_steps_per_control_step)
-        obs = self._get_obs(data)
-        return obs, data
+        obs = self._get_obs(data, last_data, last_last_data)
+        reward, done = self._get_reward_done(data, last_dist_goal)
+        cost = self._get_cost(data)
+        info['cost'] = cost
+        
+        return obs, reward, done, info, data
     
-    def _get_obs(self, data: mjx.Data) -> jp.ndarray:
+    def _get_obs(self, data: mjx.Data, last_data: mjx.Data, last_last_data: mjx.Data) -> jp.ndarray:
         #TODO: Weiye
-        obs = data.xpos
-        robot_pos = data.xpos[1,:]
-        robot_mat = data.xmat[1,:,:]
-        hazard_pos = data.xpos[3:,:]
-        robot_pos = jp.array([0,0,0.])
-        robot_mat = jp.identity(3)
-        hazard_pos = 0.01*jp.array([[-5.64005098, -9.74073768],
-                                [-4.50337522, -5.64677607],
-                                [-5.79632198 ,-6.69665179],
-                                [-7.95351366 ,-3.80729034],
-                                [-7.00345326 ,-7.33172725],
-                                [-3.78866167 ,-4.70857906],
-                                [-8.65420055 ,-4.86421879],
-                                [-8.15560134 ,-2.14664852]]
-                                )
-        # import ipdb;ipdb.set_trace()
+        # get the raw position data of different objects current frame 
+        robot_pos = data.xpos[self.body_name2id['robot'],:]
+        robot_mat = data.xmat[self.body_name2id['robot'],:,:]
+        hazard_pos = data.xpos[self.body_name2id['hazards'],:]
+        goal_pos = data.xpos[self.body_name2id['goal'],:]
+        
+        # get the raw joint info current frame 
+        #! TODO: check jpos and following correctness
+        jpos = data.jpos[self.body_name2id['robot'],:]
+        jvel = data.jvel[self.body_name2id['robot'],:]
+        jacc = data.jacc[self.body_name2id['robot'],:]
+        
+        # get the raw position data of previous frames
+        robot_pos_last = last_data.xpos[self.body_name2id['robot'],:]
+        robot_pos_last_last = last_last_data.xpos[self.body_name2id['robot'],:]
+        
         def ego_xy(pos):
-        ''' Return the egocentric XY vector to a position from the robot '''
-        assert pos.shape == (2,), f'Bad pos {pos}'
-        pos_3vec = jp.concatenate([pos, jp.array([0])]) # Add a zero z-coordinate
-        world_3vec = pos_3vec - robot_pos
-        return jp.matmul(world_3vec, robot_mat)[:2] # only take XY coordinates
+            ''' Return the egocentric XY vector to a position from the robot '''
+            assert pos.shape == (2,), f'Bad pos {pos}'
+            pos_3vec = jp.concatenate([pos, jp.array([0])]) # Add a zero z-coordinate
+            world_3vec = pos_3vec - robot_pos
+            return jp.matmul(world_3vec, robot_mat)[:2] # only take XY coordinates
 
-        def torch_angle(real_part, imag_part):
-        '''Returns angle in radian, shape = B, where B is batch size'''
-        # Calculate the angle (phase) in radians
-        angle_rad = jp.arctan2(imag_part, real_part)
+        def jax_angle(real_part, imag_part):
+            '''Returns robot heading angle in the world frame'''
+            # Calculate the angle (phase) in radians
+            angle_rad = jp.arctan2(imag_part, real_part)
+            return angle_rad
 
-
-        # print("Angle (in radians):", angle_rad)
-        return angle_rad
-
-        def obs_lidar_pseudo(positions, lidar_num_bins = 16, lidar_max_dist=None, lidar_exp_gain = 1.0,
-                            lidar_alias = True):
+        def obs_lidar_pseudo(positions):
             '''
             Return a robot-centric lidar observation of a list of positions.
 
@@ -230,47 +223,89 @@ class Engine(gym.Env, gym.utils.EzPickle):
             - constant size observation with variable numbers of objects
             '''
             
-            obs = jp.zeros(lidar_num_bins)
+            obs = jp.zeros(self.lidar_num_bins)
             for pos in positions:
-            pos = jp.asarray(pos)
-            if pos.shape == (3,):
-                pos = pos[:2] # Truncate Z coordinate
-            z = ego_xy(pos)
-            dist = jp.linalg.norm(z) # shape = B
-            angle = torch_angle(real_part=z[0], imag_part=z[1]) % (jp.pi * 2) # shape = B
-            # z = complex(*ego_xy(pos)) # X, Y as real, imaginary components
-            # dist = jp.abs(z)
-            # angle = jp.angle(z) % (jp.pi * 2)
-            bin_size = (jp.pi * 2) / lidar_num_bins
-            
-            bin = (angle / bin_size).astype(int)
-            bin_angle = bin_size * bin
-            # import ipdb; ipdb.set_trace()
-            if lidar_max_dist is None:
-                sensor = jp.exp(-lidar_exp_gain * dist)
-            else:
-                sensor = max(0, lidar_max_dist - dist) / lidar_max_dist
-            senor_new = jp.maximum(obs[bin], sensor)
-            obs = obs.at[bin].set(senor_new)
-            # Aliasing
-            # this is to make the neighborhood bins has sense of the what's happending in the bin that has obstacle
-            if lidar_alias:
-                alias_jp = (angle - bin_angle) / bin_size
-                # assert 0 <= alias_jp <= 1, f'bad alias_jp {alias_jp}, dist {dist}, angle {angle}, bin {bin}'
-                bin_plus = (bin + 1) % lidar_num_bins
-                bin_minus = (bin - 1) % lidar_num_bins
-                obs = obs.at[bin_plus].set(jp.maximum(obs[bin_plus], alias_jp * sensor))
-                obs = obs.at[bin_minus].set(jp.maximum(obs[bin_minus], (1 - alias_jp) * sensor))
+                pos = jp.asarray(pos)
+                if pos.shape == (3,):
+                    pos = pos[:2] # Truncate Z coordinate
+                z = ego_xy(pos) # (X, Y) to be treated as real, imaginary components
+                dist = jp.linalg.norm(z) # shape = B
+                angle = jax_angle(real_part=z[0], imag_part=z[1]) % (jp.pi * 2) # shape = B
+                bin_size = (jp.pi * 2) / self.lidar_num_bins
+                
+                bin = (angle / bin_size).astype(int)
+                bin_angle = bin_size * bin
+                # import ipdb; ipdb.set_trace()
+                if self.lidar_max_dist is None:
+                    sensor = jp.exp(-self.lidar_exp_gain * dist)
+                else:
+                    sensor = max(0, self.lidar_max_dist - dist) / self.lidar_max_dist
+                senor_new = jp.maximum(obs[bin], sensor)
+                obs = obs.at[bin].set(senor_new)
+                # Aliasing
+                # this is to make the neighborhood bins has sense of the what's happending in the bin that has obstacle
+                if self.lidar_alias:
+                    alias_jp = (angle - bin_angle) / bin_size
+                    assert 0 <= alias_jp <= 1, f'bad alias_jp {alias_jp}, dist {dist}, angle {angle}, bin {bin}'
+                    bin_plus = (bin + 1) % self.lidar_num_bins
+                    bin_minus = (bin - 1) % self.lidar_num_bins
+                    obs = obs.at[bin_plus].set(jp.maximum(obs[bin_plus], alias_jp * sensor))
+                    obs = obs.at[bin_minus].set(jp.maximum(obs[bin_minus], (1 - alias_jp) * sensor))
             return obs
+        
+        def ego_vel_acc():
+            '''velocity and acceleration in the robot frame '''
+            # current velocity
+            pos_diff_vec_world_frame = robot_pos - robot_pos_last
+            vel_vec_world_frame = pos_diff_vec_world_frame / self.timestep
+            
+            # last velocity 
+            last_pos_diff_vec_world_frame = robot_pos_last - robot_pos_last_last
+            last_vel_vec_world_frame = last_pos_diff_vec_world_frame / self.timestep
+            
+            # current acceleration
+            acc_vec_world_frame = (vel_vec_world_frame - last_vel_vec_world_frame) / self.timestep
+            
+            # to robot frame 
+            vel_vec_robot_frame = jp.matmul(vel_vec_world_frame, robot_mat)[:2] # only take XY coordinates
+            acc_vec_robot_frame = jp.matmul(acc_vec_world_frame, robot_mat)[:2] # only take XY coordinates
+            
+            return vel_vec_robot_frame, acc_vec_robot_frame
 
-        obs = obs_lidar_pseudo(hazard_pos)
-        # import ipdb;ipdb.set_trace()
+        hazards_lidar = obs_lidar_pseudo(hazard_pos)
+        goal_lidar = obs_lidar_pseudo(goal_pos)
+        vel_vec, acc_vec = ego_vel_acc()
+
+        # concatenate processed data for different objects together 
+        obs = jp.concatenate([jpos, jvel, jacc, vel_vec, acc_vec, hazards_lidar, goal_lidar])
         return obs
 
-    def reward(self):
-        #TODO: Weiye
-        pass
-
+    def _get_reward_done(self, data: mjx.Data, last_dist_goal: mjx.Data) -> Tuple[jp.ndarray, jp.bool]:
+        #TODO: Weiye        
+        # get raw data of robot pos and goal pos
+        robot_pos = data.xpos[self.body_name2idx['robot'],:]
+        goal_pos = data.xpos[self.body_name2id['goal'],:]
+        assert robot_pos.shape == (3,) and goal_pos.shape == (3,)
+        # Return the distance from the robot to an XY position
+        dist_goal = jp.sqrt(jp.sum(jp.square(goal_pos[:2] - robot_pos[:2]))) 
+        
+        reward += (last_dist_goal - dist_goal) * self.reward_distance
+        if dist_goal < self.goal_size:
+            done = jp.array(True)
+        else:
+            done = jp.array(False)
+        #! TODO: update the last dist goal 
+        return reward, done
+    
+    def _get_cost(self, data: mjx.Data) -> jp.ndarray:
+        # get the raw position data of different objects current frame 
+        robot_pos = data.xpos[self.body_name2id['robot'],:]
+        hazard_pos = data.xpos[self.body_name2id['hazards'],:]
+        dist_robot2hazard = jp.linalg.norm(hazard_pos[:,:2] - robot_pos[:,:2], axis=1)
+        dist_robot2hazard_below_threshold = jp.maximum(dist_robot2hazard, self.hazards_size)
+        cost = jp.sum(self.hazards_size*jp.ones(dist_robot2hazard_below_threshold.shape) - dist_robot2hazard_below_threshold)
+        return cost 
+        
     def render_lidar(self, poses, color, offset, group):
         pass
 
