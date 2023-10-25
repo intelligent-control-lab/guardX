@@ -11,7 +11,7 @@ import torch
 from torch.utils import dlpack as torch_dlpack
 from collections import abc
 import functools
-from typing import Any, Dict, Union
+from typing import Any, Dict, Union, Tuple
 import warnings
 import jax
 from jax import dlpack as jax_dlpack
@@ -450,7 +450,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         obs = jp.concatenate([jpos, jvel, jacc, vel_vec, acc_vec, hazards_lidar, goal_lidar])
         return obs
 
-    def _get_reward_done(self, data: mjx.Data, last_dist_goal: mjx.Data) -> Tuple[jp.ndarray, jp.bool]:        
+    def _get_reward_done(self, data: mjx.Data, last_dist_goal: mjx.Data) -> Tuple[jp.ndarray, jp.bool_]:        
         # get raw data of robot pos and goal pos
         robot_pos = data.xpos[self.body_name2idx['robot'],:]
         goal_pos = data.xpos[self.body_name2id['goal'],:]
