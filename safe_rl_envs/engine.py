@@ -191,21 +191,46 @@ class Engine(gym.Env, gym.utils.EzPickle):
         obs = self._get_obs(data)
         
         return obs, data
-
-    def mjx_step(self, data: mjx.Data, action: jp.ndarray, rng):
-        """ Runs one timestep of an unbatched environment's dynamics."""
-        
+    
+    def mjx_step(self, data: mjx.Data, 
+                 last_data: mjx.Data, 
+                 last_last_data: mjx.Data, 
+                 last_dist_goal: mjx.Data,
+                 action: jp.ndarray,
+                 rng):
+        #! TODO: be able to send the last data and last last data and last dist goal 
+        """Runs one timestep of the environment's dynamics."""
         def f(data, _):
-            # data = data.replace(ctrl=action)
             qpos = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1, maxval=1)
-            data = data.replace(qpos=qpos, qvel=jp.zeros(self.mjx_model.nv), ctrl=jp.zeros(self.mjx_model.nu))
+            data = data.replace(qpos=qpos, qvel=jp.zeros(self.mjx_model.nv), ctrl=action)
             return (
                 mjx.step(self.mjx_model, data),
                 None,
             )
         data, _ = jax.lax.scan(f, data, (), self._physics_steps_per_control_step)
-        obs = self._get_obs(data)
-        return obs, data
+        obs = self._get_obs(data, last_data, last_last_data)
+        reward, done = self._get_reward_done(data, last_dist_goal)
+        cost = self._get_cost(data)
+        info = {}
+        info['cost'] = cost
+        
+        return obs, reward, done, info, data
+   
+
+    # def mjx_step(self, data: mjx.Data, action: jp.ndarray, rng):
+    #     """ Runs one timestep of an unbatched environment's dynamics."""
+        
+    #     def f(data, _):
+    #         # data = data.replace(ctrl=action)
+    #         qpos = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1, maxval=1)
+    #         data = data.replace(qpos=qpos, qvel=jp.zeros(self.mjx_model.nv), ctrl=jp.zeros(self.mjx_model.nu))
+    #         return (
+    #             mjx.step(self.mjx_model, data),
+    #             None,
+    #         )
+    #     data, _ = jax.lax.scan(f, data, (), self._physics_steps_per_control_step)
+    #     obs = self._get_obs(data)
+    #     return obs, data
     
     def build_observation_space(self):
         pass
@@ -214,7 +239,6 @@ class Engine(gym.Env, gym.utils.EzPickle):
         ''' Reset the physics simulation and return observation '''
         obs, self.data= self._reset(self.key)
         return jax_to_torch(obs)
-
     
     def step(self, action):
         ''' Take a step and return observation, reward, done, and info '''
@@ -235,110 +259,89 @@ class Engine(gym.Env, gym.utils.EzPickle):
         layout["hazards_pos"] = xpos
         return layout
         
-    def _get_obs(self, data: mjx.Data) -> jp.ndarray:
-        #TODO: Weiye
-        obs = data.xpos
-        robot_pos = data.xpos[1,:]
-        robot_mat = data.xmat[1,:,:]
-        hazard_pos = data.xpos[3:,:]
-        def ego_xy(pos):
-            ''' Return the egocentric XY vector to a position from the robot '''
-            assert pos.shape == (2,), f'Bad pos {pos}'
-            pos_3vec = jp.concatenate([pos, jp.array([0])]) # Add a zero z-coordinate
-            world_3vec = pos_3vec - robot_pos
-            return jp.matmul(world_3vec, robot_mat)[:2] # only take XY coordinates
+    # def _get_obs(self, data: mjx.Data) -> jp.ndarray:
+    #     #TODO: Weiye
+    #     obs = data.xpos
+    #     robot_pos = data.xpos[1,:]
+    #     robot_mat = data.xmat[1,:,:]
+    #     hazard_pos = data.xpos[3:,:]
+    #     def ego_xy(pos):
+    #         ''' Return the egocentric XY vector to a position from the robot '''
+    #         assert pos.shape == (2,), f'Bad pos {pos}'
+    #         pos_3vec = jp.concatenate([pos, jp.array([0])]) # Add a zero z-coordinate
+    #         world_3vec = pos_3vec - robot_pos
+    #         return jp.matmul(world_3vec, robot_mat)[:2] # only take XY coordinates
 
-        def torch_angle(real_part, imag_part):
-            '''Returns angle in radian, shape = B, where B is batch size'''
-            # Calculate the angle (phase) in radians
-            angle_rad = jp.arctan2(imag_part, real_part)
-            return angle_rad
+    #     def torch_angle(real_part, imag_part):
+    #         '''Returns angle in radian, shape = B, where B is batch size'''
+    #         # Calculate the angle (phase) in radians
+    #         angle_rad = jp.arctan2(imag_part, real_part)
+    #         return angle_rad
 
-        def obs_lidar_pseudo(positions, lidar_num_bins = 16, lidar_max_dist=None, lidar_exp_gain = 1.0,
-                            lidar_alias = True):
-            '''
-            Return a robot-centric lidar observation of a list of positions.
-
-
-            Lidar is a set of bins around the robot (divided evenly in a circle).
-            The detection directions are exclusive and exhaustive for a full 360 view.
-            Each bin reads 0 if there are no objects in that direction.
-            If there are multiple objects, the distance to the closest one is used.
-            Otherwise the bin reads the fraction of the distance towards the robot.
+    #     def obs_lidar_pseudo(positions, lidar_num_bins = 16, lidar_max_dist=None, lidar_exp_gain = 1.0,
+    #                         lidar_alias = True):
+    #         '''
+    #         Return a robot-centric lidar observation of a list of positions.
 
 
-            E.g. if the object is 90% of lidar_max_dist away, the bin will read 0.1,
-            and if the object is 10% of lidar_max_dist away, the bin will read 0.9.
-            (The reading can be thought of as "closeness" or inverse distance)
+    #         Lidar is a set of bins around the robot (divided evenly in a circle).
+    #         The detection directions are exclusive and exhaustive for a full 360 view.
+    #         Each bin reads 0 if there are no objects in that direction.
+    #         If there are multiple objects, the distance to the closest one is used.
+    #         Otherwise the bin reads the fraction of the distance towards the robot.
 
 
-            This encoding has some desirable properties:
-            - bins read 0 when empty
-            - bins smoothly increase as objects get close
-            - maximum reading is 1.0 (where the object overlaps the robot)
-            - close objects occlude far objects
-            - constant size observation with variable numbers of objects
-            '''
+    #         E.g. if the object is 90% of lidar_max_dist away, the bin will read 0.1,
+    #         and if the object is 10% of lidar_max_dist away, the bin will read 0.9.
+    #         (The reading can be thought of as "closeness" or inverse distance)
+
+
+    #         This encoding has some desirable properties:
+    #         - bins read 0 when empty
+    #         - bins smoothly increase as objects get close
+    #         - maximum reading is 1.0 (where the object overlaps the robot)
+    #         - close objects occlude far objects
+    #         - constant size observation with variable numbers of objects
+    #         '''
             
-            obs = jp.zeros(lidar_num_bins)
-            for pos in positions:
-                pos = jp.asarray(pos)
-                if pos.shape == (3,):
-                    pos = pos[:2] # Truncate Z coordinate
-                z = ego_xy(pos)
-                dist = jp.linalg.norm(z) # shape = B
-                angle = torch_angle(real_part=z[0], imag_part=z[1]) % (jp.pi * 2) # shape = B
-                # z = complex(*ego_xy(pos)) # X, Y as real, imaginary components
-                # dist = jp.abs(z)
-                # angle = jp.angle(z) % (jp.pi * 2)
-                bin_size = (jp.pi * 2) / lidar_num_bins
+    #         obs = jp.zeros(lidar_num_bins)
+    #         for pos in positions:
+    #             pos = jp.asarray(pos)
+    #             if pos.shape == (3,):
+    #                 pos = pos[:2] # Truncate Z coordinate
+    #             z = ego_xy(pos)
+    #             dist = jp.linalg.norm(z) # shape = B
+    #             angle = torch_angle(real_part=z[0], imag_part=z[1]) % (jp.pi * 2) # shape = B
+    #             # z = complex(*ego_xy(pos)) # X, Y as real, imaginary components
+    #             # dist = jp.abs(z)
+    #             # angle = jp.angle(z) % (jp.pi * 2)
+    #             bin_size = (jp.pi * 2) / lidar_num_bins
                 
-                bin = (angle / bin_size).astype(int)
-                bin_angle = bin_size * bin
-                # import ipdb; ipdb.set_trace()
-                if lidar_max_dist is None:
-                    sensor = jp.exp(-lidar_exp_gain * dist)
-                else:
-                    sensor = max(0, lidar_max_dist - dist) / lidar_max_dist
-                senor_new = jp.maximum(obs[bin], sensor)
-                obs = obs.at[bin].set(senor_new)
-                # Aliasing
-                # this is to make the neighborhood bins has sense of the what's happending in the bin that has obstacle
-                if lidar_alias:
-                    alias_jp = (angle - bin_angle) / bin_size
-                    # assert 0 <= alias_jp <= 1, f'bad alias_jp {alias_jp}, dist {dist}, angle {angle}, bin {bin}'
-                    bin_plus = (bin + 1) % lidar_num_bins
-                    bin_minus = (bin - 1) % lidar_num_bins
-                    obs = obs.at[bin_plus].set(jp.maximum(obs[bin_plus], alias_jp * sensor))
-                    obs = obs.at[bin_minus].set(jp.maximum(obs[bin_minus], (1 - alias_jp) * sensor))
-            return obs
+    #             bin = (angle / bin_size).astype(int)
+    #             bin_angle = bin_size * bin
+    #             # import ipdb; ipdb.set_trace()
+    #             if lidar_max_dist is None:
+    #                 sensor = jp.exp(-lidar_exp_gain * dist)
+    #             else:
+    #                 sensor = max(0, lidar_max_dist - dist) / lidar_max_dist
+    #             senor_new = jp.maximum(obs[bin], sensor)
+    #             obs = obs.at[bin].set(senor_new)
+    #             # Aliasing
+    #             # this is to make the neighborhood bins has sense of the what's happending in the bin that has obstacle
+    #             if lidar_alias:
+    #                 alias_jp = (angle - bin_angle) / bin_size
+    #                 # assert 0 <= alias_jp <= 1, f'bad alias_jp {alias_jp}, dist {dist}, angle {angle}, bin {bin}'
+    #                 bin_plus = (bin + 1) % lidar_num_bins
+    #                 bin_minus = (bin - 1) % lidar_num_bins
+    #                 obs = obs.at[bin_plus].set(jp.maximum(obs[bin_plus], alias_jp * sensor))
+    #                 obs = obs.at[bin_minus].set(jp.maximum(obs[bin_minus], (1 - alias_jp) * sensor))
+    #         return obs
 
-        obs = obs_lidar_pseudo(hazard_pos)
-        # import ipdb;ipdb.set_trace()
-        return obs
-
-    def mjx_step_newer(self, data: mjx.Data, 
-                 last_data: mjx.Data, 
-                 last_last_data: mjx.Data, 
-                 last_dist_goal: mjx.Data,
-                 action: jp.ndarray):
-        #! TODO: be able to send the last data and last last data and last dist goal 
-        """Runs one timestep of the environment's dynamics."""
-        def f(data, _):
-            data = data.replace(ctrl=action)
-            return (
-                mjx.step(self.mjx_model, data),
-                None,
-            )
-        data, _ = jax.lax.scan(f, data, (), self._physics_steps_per_control_step)
-        obs = self._get_obs_newer(data, last_data, last_last_data)
-        reward, done = self._get_reward_done(data, last_dist_goal)
-        cost = self._get_cost(data)
-        info['cost'] = cost
-        
-        return obs, reward, done, info, data
-    
-    def _get_obs_newer(self, data: mjx.Data, last_data: mjx.Data, last_last_data: mjx.Data) -> jp.ndarray:
+    #     obs = obs_lidar_pseudo(hazard_pos)
+    #     # import ipdb;ipdb.set_trace()
+    #     return obs
+ 
+    def _get_obs(self, data: mjx.Data, last_data: mjx.Data, last_last_data: mjx.Data) -> jp.ndarray:
         # get the raw position data of different objects current frame 
         robot_pos = data.xpos[self.body_name2id['robot'],:]
         robot_mat = data.xmat[self.body_name2id['robot'],:,:]
