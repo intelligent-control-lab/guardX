@@ -1,15 +1,21 @@
 from safe_rl_envs.engine import Engine
 from safe_rl_envs.utils.mjx_device import device_put
 
+import torch
+import time
 env = Engine()
 obs = env.reset()
-
-#test
+t = time.time()
+print("start")
+while 1:
+    act = 10 * (torch.rand(env.action_space.shape) - 0.5)
+    obs = env.step(act)
+    env.render()
+print("finish ", time.time() - t)
 # import jax
 # from jax import numpy as jp
 # import mujoco
 # from mujoco import mjx
-
 
 
 # device_id = 6

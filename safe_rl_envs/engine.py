@@ -1,8 +1,11 @@
 #!/usr/bin/env python
 import gym
+from gym import spaces
+from gym.vector import utils
 import jax
 from jax import numpy as jp
 import mujoco
+import mujoco.viewer
 from mujoco import mjx
 import torch
 from torch.utils import dlpack as torch_dlpack
@@ -15,6 +18,7 @@ from jax import dlpack as jax_dlpack
 from .utils.engine_utils import *
 from .utils.mjx_device import device_put
 import numpy as np
+
 
 
 # Distinct colors for different types of objects.
@@ -64,6 +68,9 @@ ORIGIN_COORDINATES = np.zeros(3)
 DEFAULT_WIDTH = 1920
 DEFAULT_HEIGHT = 1080
 
+class ResamplingError(AssertionError):
+    ''' Raised when we fail to sample a valid distribution of objects or goals '''
+    pass
 
 
 class Engine(gym.Env, gym.utils.EzPickle):
@@ -89,7 +96,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self.body_name2id = {}
         self.hazards_size = 0.3
         self.goal_size = 0.5
-        self.device_id = 1
+        self.device_id = 0
         self._seed(10) # generate self._key for jax randomization
         
         self._physics_steps_per_control_step = 1 # number of steps per Mujoco step
@@ -103,22 +110,32 @@ class Engine(gym.Env, gym.utils.EzPickle):
         
         
         
-        self.num_env = 2048 # Number of the batched environment
+        self.num_envs = 1 # Number of the batched environment
         self.key = jax.random.PRNGKey(0) # Number of the batched environment
 
         # Use jax.vmap to warp single environment reset to batched reset function
         def batched_reset(rng: jax.Array):
-            if self.num_env is not None:
-                rng = jax.random.split(rng, self.num_env)
+            if self.num_envs is not None:
+                rng = jax.random.split(rng, self.num_envs)
             return jax.vmap(self.mjx_reset)(rng)
         
         # Use jax.vmap to warp single environment step to batched step function
-        def batched_step(data: mjx.Data, action: jax.Array):
-            return jax.vmap(self.mjx_step)(data, action)
+        def batched_step(data: mjx.Data, action: jax.Array, rng: jax.Array):
+            if self.num_envs is not None:
+                rng = jax.random.split(rng, self.num_envs)
+            return jax.vmap(self.mjx_step)(data, action, rng)
         
         self._reset = jax.jit(batched_reset) # Use Just In Time (JIT) compilation to execute batched reset efficiently
         self._step = jax.jit(batched_step) # Use Just In Time (JIT) compilation to execute batched step efficiently
         self.data = None # Keep track of the current state of the whole batched environment with self.data
+        self.viewer = None
+        self.hazards_placements = [-2,2]
+        
+        ctrl_range = self.mj_model.actuator_ctrlrange
+        ctrl_range[~(self.mj_model.actuator_ctrllimited == 1), :] = np.array([-np.inf, np.inf])
+        action = jax.tree_map(np.array, ctrl_range)
+        action_space = spaces.Box(action[:, 0], action[:, 1], dtype='float32')
+        self.action_space = utils.batch_space(action_space, self.num_envs)
         
     # @property
     # def model(self):
@@ -159,27 +176,29 @@ class Engine(gym.Env, gym.utils.EzPickle):
     #     return [self.data.get_body_xpos(f'hazard{i}').copy() for i in range(self.hazards_num)]
 
     def _seed(self, seed: int = 0):
-        self._key = jax.random.PRNGKey(seed)
+        self.key = jax.random.PRNGKey(seed)
 
     def mjx_reset(self, rng):
         """ Resets an unbatched environment to an initial state."""
-        rng, rng1, rng2 = jax.random.split(rng, 3)
-        self._reset_noise_scale = 1e-2
-        low, hi = -self._reset_noise_scale, self._reset_noise_scale
-        qpos = self.mjx_model.qpos0 + jax.random.uniform(rng1, (self.mjx_model.nq,), minval=low, maxval=hi)
-        qvel = jax.random.uniform(rng2, (self.mjx_model.nv,), minval=low, maxval=hi)
-
+        layout = self.build_layout(rng)
         data = self.mjx_data
-        data = data.replace(qpos=qpos, qvel=qvel, ctrl=jp.zeros(self.mjx_model.nu))
+        xpos = self.mjx_data.xpos
+        xpos = xpos.at[3:].set(layout["hazards_pos"])
+        print(xpos.shape)
+        # data = data.replace(xpos=jp.zeros(self.mjx_model.nbody), qpos=jp.zeros(self.mjx_model.nq), qvel=jp.zeros(self.mjx_model.nv), ctrl=jp.zeros(self.mjx_model.nu))
         data = mjx.forward(self.mjx_model, data)
+        data = mjx.step(self.mjx_model, data)
         obs = self._get_obs(data)
         
         return obs, data
 
-    def mjx_step(self, data: mjx.Data, action: jp.ndarray):
+    def mjx_step(self, data: mjx.Data, action: jp.ndarray, rng):
         """ Runs one timestep of an unbatched environment's dynamics."""
+        
         def f(data, _):
-            data = data.replace(ctrl=action)
+            # data = data.replace(ctrl=action)
+            qpos = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1, maxval=1)
+            data = data.replace(qpos=qpos, qvel=jp.zeros(self.mjx_model.nv), ctrl=jp.zeros(self.mjx_model.nu))
             return (
                 mjx.step(self.mjx_model, data),
                 None,
@@ -219,38 +238,29 @@ class Engine(gym.Env, gym.utils.EzPickle):
     
     def step(self, action):
         ''' Take a step and return observation, reward, done, and info '''
-        obs, self.data = self._step(self.data, action)
+        action = torch_to_jax(action)
+        self.key,_ = jax.random.split(self.key, 2)
+        obs, self.data= self._step(self.data, action, self.key)
+        print(self.data.xpos.shape)
         return jax_to_torch(obs)
     
-    def mjx_step(self, data: mjx.Data, action: jp.ndarray):
-        """Runs one timestep of the environment's dynamics."""
-        def f(data, _):
-            data = data.replace(ctrl=action)
-            return (
-                mjx.step(self.mjx_model, data),
-                None,
-            )
-        data, _ = jax.lax.scan(f, data, (), self._physics_steps_per_control_step)
-        obs = self._get_obs(data)
-        return obs, data
-    
+    def build_layout(self, rng):
+        ''' Rejection sample a placement of objects to find a layout. '''
+        # if not self.randomize_layout:
+        #     self.rs = np.random.RandomState(0)
+        rng, rng1, rng2 = jax.random.split(rng, 3)
+        
+        xpos = jax.random.uniform(rng1, (8,3), minval=self.hazards_placements[0], maxval=self.hazards_placements[1])
+        layout = {}
+        layout["hazards_pos"] = xpos
+        return layout
+        
     def _get_obs(self, data: mjx.Data) -> jp.ndarray:
         #TODO: Weiye
         obs = data.xpos
         robot_pos = data.xpos[1,:]
         robot_mat = data.xmat[1,:,:]
         hazard_pos = data.xpos[3:,:]
-        robot_pos = jp.array([0,0,0.])
-        robot_mat = jp.identity(3)
-        hazard_pos = 0.01*jp.array([[-5.64005098, -9.74073768],
-                                [-4.50337522, -5.64677607],
-                                [-5.79632198 ,-6.69665179],
-                                [-7.95351366 ,-3.80729034],
-                                [-7.00345326 ,-7.33172725],
-                                [-3.78866167 ,-4.70857906],
-                                [-8.65420055 ,-4.86421879],
-                                [-8.15560134 ,-2.14664852]]
-                                )
         def ego_xy(pos):
             ''' Return the egocentric XY vector to a position from the robot '''
             assert pos.shape == (2,), f'Bad pos {pos}'
@@ -337,10 +347,21 @@ class Engine(gym.Env, gym.utils.EzPickle):
     def render_sphere(self, pos, size, color, label='', alpha=0.1):
         pass
 
-    def render(self,
-               mode='human', 
-               camera_id=-1,
-               width=DEFAULT_WIDTH,
-               height=DEFAULT_HEIGHT
-               ):
-       pass
+    def viewer_setup(self):
+        # self.viewer.cam.trackbodyid = 0         # id of the body to track ()
+        # self.viewer.cam.distance = self.model.stat.extent * 3       # how much you "zoom in", model.stat.extent is the max limits of the arena
+        self.viewer.cam.distance = 10
+        self.viewer.cam.lookat[0] = 0         # x,y,z offset from the object (works if trackbodyid=-1)
+        self.viewer.cam.lookat[1] = -3
+        self.viewer.cam.lookat[2] = 5
+        self.viewer.cam.elevation = -60           # camera rotation around the axis in the plane going through the frame origin (if 0 you just see a line)
+        self.viewer.cam.azimuth = 90              # camera rotation around the camera's vertical axis
+        self.viewer.opt.geomgroup = 1    
+
+    def render(self):
+        mjx.device_get_into(self.mj_data, self.data)
+        if self.viewer is None:
+            self.viewer = mujoco.viewer.launch_passive(self.mj_model, self.mj_data)
+            self.viewer_setup()
+        mujoco.mj_step(self.mj_model, self.mj_data)
+        self.viewer.sync()

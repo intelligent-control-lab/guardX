@@ -22,31 +22,49 @@
 			<site name="robot" rgba="1 0 0 .1"></site>
 		</body>
 		<body name="goal" pos="1.195723030703368 -1.1370608203833645 0.26" quat="0.8917140993290078 0.0 0.0 0.4525991218041153">
+			<joint type="slide" axis="1 0 0" name="x_goal" damping="0"/>
+            <joint type="slide" axis="0 1 0" name="y_goal" damping="0"/>
 			<geom name="goal" type="sphere" size="0.5" rgba="0.0 1.0 0.0 0.25" group="0" contype="0" conaffinity="0"></geom>
 		</body>
 		<body name="hazard0" pos="-0.33947860805272256 1.2449961672639667 0.02" quat="-0.8874594902933746 0.0 0.0 0.46088572671349226">
 			<geom name="hazard0" type="sphere" size="0.3 " rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
+			<joint type="slide" axis="1 0 0" name="x_hazard0" damping="0"/>
+            <joint type="slide" axis="0 1 0" name="y_hazard0" damping="0"/>
 		</body>
 		<body name="hazard1" pos="-1.2893507298225213 -1.3691867981931911 0.02" quat="-0.13097580495473057 0.0 0.0 0.9913855650131589">
 			<geom name="hazard1" type="sphere" size="0.3 " rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
+			<joint type="slide" axis="1 0 0" name="x_hazard1" damping="0"/>
+            <joint type="slide" axis="0 1 0" name="y_hazard1" damping="0"/>
 		</body>
 		<body name="hazard2" pos="-0.1495188656771398 0.20817760465517265 0.02" quat="0.6482565808992422 0.0 0.0 0.761421962725547">
 			<geom name="hazard2" type="sphere" size="0.3 " rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
+			<joint type="slide" axis="1 0 0" name="x_hazard2" damping="0"/>
+            <joint type="slide" axis="0 1 0" name="y_hazard2" damping="0"/>
 		</body>
 		<body name="hazard3" pos="-0.16283266718968248 -1.0928996984525527 0.02" quat="-0.47554180835288684 0.0 0.0 0.8796931217808095">
 			<geom name="hazard3" type="sphere" size="0.3 " rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
+			<joint type="slide" axis="1 0 0" name="x_hazard3" damping="0"/>
+            <joint type="slide" axis="0 1 0" name="y_hazard3" damping="0"/>
 		</body>
 		<body name="hazard4" pos="0.6867664682614674 0.25120230285012113 0.02" quat="0.6901180549505869 0.0 0.0 0.7236968082223514">
 			<geom name="hazard4" type="sphere" size="0.3 " rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
+			<joint type="slide" axis="1 0 0" name="x_hazard4" damping="0"/>
+            <joint type="slide" axis="0 1 0" name="y_hazard4" damping="0"/>
 		</body>
 		<body name="hazard5" pos="-1.5870474510532357 0.758927576524211 0.02" quat="0.6068483701780076 0.0 0.0 0.7948176241203361">
 			<geom name="hazard5" type="sphere" size="0.3 " rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
+			<joint type="slide" axis="1 0 0" name="x_hazard5" damping="0"/>
+            <joint type="slide" axis="0 1 0" name="y_hazard5" damping="0"/>
 		</body>
 		<body name="hazard6" pos="-1.4637180686184053 -0.0882165924506253 0.02" quat="0.3252881350407623 0.0 0.0 0.9456149476407947">
 			<geom name="hazard6" type="sphere" size="0.3 " rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
+			<joint type="slide" axis="1 0 0" name="x_hazard6" damping="0"/>
+            <joint type="slide" axis="0 1 0" name="y_hazard6" damping="0"/>
 		</body>
 		<body name="hazard7" pos="1.519618251486293 0.022765937203953923 0.02" quat="-0.9988166023856219 0.0 0.0 0.048635324598922024">
 			<geom name="hazard7" type="sphere" size="0.3 " rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
+			<joint type="slide" axis="1 0 0" name="x_hazard7" damping="0"/>
+            <joint type="slide" axis="0 1 0" name="y_hazard7" damping="0"/>
 		</body>
 		<light cutoff="100" diffuse="1 1 1" dir="0 0 -1" directional="true" exponent="1" pos="0 0 0.5" specular="0 0 0" castshadow="false"></light>
 		<camera name="fixednear" pos="0 -2 2" zaxis="0 -1 1"></camera>
@@ -62,8 +80,8 @@
 		<subtreeangmom body="robot" name="subtreeangmom"></subtreeangmom>
 	</sensor>
 	<actuator>
-        <motor gear="10" joint="x" name="x"/>
-        <motor gear="1" joint="y" name="y"/>
+        <velocity gear="0.1" joint="x" name="x"/>
+        <velocity gear="0.1" joint="y" name="y"/>
 		<!-- <motor gear="0.3 0 0 0 0 0" site="robot" name="x"></motor>
 		<velocity gear="0.3" jointinparent="z" name="z"></velocity> -->
 	</actuator>
