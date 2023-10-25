@@ -97,6 +97,12 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self.hazards_size = 0.3
         self.goal_size = 0.5
         self.device_id = 0
+        self.lidar_num_bins = 16
+        self.lidar_max_dist = None
+        self.lidar_exp_gain = 1.0
+        self.timestep = 0.002
+        self.reward_distance = 1.0
+        self.lidar_alias = True
         self._seed(10) # generate self._key for jax randomization
         
         self._physics_steps_per_control_step = 1 # number of steps per Mujoco step
@@ -110,7 +116,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         
         
         
-        self.num_envs = 1 # Number of the batched environment
+        self.num_envs = 2048 # Number of the batched environment
         self.key = jax.random.PRNGKey(0) # Number of the batched environment
 
         # Use jax.vmap to warp single environment reset to batched reset function
@@ -123,11 +129,13 @@ class Engine(gym.Env, gym.utils.EzPickle):
         def batched_step(data: mjx.Data, action: jax.Array, rng: jax.Array):
             if self.num_envs is not None:
                 rng = jax.random.split(rng, self.num_envs)
-            return jax.vmap(self.mjx_step)(data, action, rng)
-        
+            return jax.vmap(self.mjx_step)(data, self.last_data, self.last_last_data, action, rng)
+    
         self._reset = jax.jit(batched_reset) # Use Just In Time (JIT) compilation to execute batched reset efficiently
         self._step = jax.jit(batched_step) # Use Just In Time (JIT) compilation to execute batched step efficiently
         self.data = None # Keep track of the current state of the whole batched environment with self.data
+        self.last_data = None
+        self.last_last_data = None
         self.viewer = None
         self.hazards_placements = [-2,2]
         
@@ -137,6 +145,12 @@ class Engine(gym.Env, gym.utils.EzPickle):
         action_space = spaces.Box(action[:, 0], action[:, 1], dtype='float32')
         self.action_space = utils.batch_space(action_space, self.num_envs)
         
+        
+        self.body_name2id = {}
+        self.body_name2id['floor'] = 0
+        self.body_name2id['robot'] = 1
+        self.body_name2id['goal'] = 2
+        self.body_name2id['hazards'] = [3,4,5,6,7,8,9,10]
     # @property
     # def model(self):
     #     ''' Helper to get the world's model instance '''
@@ -178,42 +192,56 @@ class Engine(gym.Env, gym.utils.EzPickle):
     def _seed(self, seed: int = 0):
         self.key = jax.random.PRNGKey(seed)
 
+    def update_data(self):
+        self.last_last_data = self.last_data
+        self.last_data = self.data
+
     def mjx_reset(self, rng):
         """ Resets an unbatched environment to an initial state."""
         layout = self.build_layout(rng)
         data = self.mjx_data
         xpos = self.mjx_data.xpos
         xpos = xpos.at[3:].set(layout["hazards_pos"])
-        print(xpos.shape)
         # data = data.replace(xpos=jp.zeros(self.mjx_model.nbody), qpos=jp.zeros(self.mjx_model.nq), qvel=jp.zeros(self.mjx_model.nv), ctrl=jp.zeros(self.mjx_model.nu))
         data = mjx.forward(self.mjx_model, data)
-        data = mjx.step(self.mjx_model, data)
-        obs = self._get_obs(data)
-        
-        return obs, data
+        last_data = data
+        last_last_data = data
+        obs = self._get_obs(data, last_data, last_last_data)
+        reward, done = self._get_reward_done(data, last_data)
+        cost = self._get_cost(data)
+        info = {}
+        info['cost'] = cost
+        qpos_new = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1, maxval=1)
+        qpos = jp.where(done > 0.0, x = qpos_new, y = data.qpos)
+        data = data.replace(qpos=qpos, qvel=jp.zeros(self.mjx_model.nv), ctrl=jp.zeros(self.mjx_model.nu))
+        return obs, reward, done, info, data
     
     def mjx_step(self, data: mjx.Data, 
                  last_data: mjx.Data, 
                  last_last_data: mjx.Data, 
-                 last_dist_goal: mjx.Data,
                  action: jp.ndarray,
                  rng):
         #! TODO: be able to send the last data and last last data and last dist goal 
         """Runs one timestep of the environment's dynamics."""
-        def f(data, _):
-            qpos = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1, maxval=1)
-            data = data.replace(qpos=qpos, qvel=jp.zeros(self.mjx_model.nv), ctrl=action)
+        def f(data, _):   
+            data = data.replace(ctrl=action)
             return (
                 mjx.step(self.mjx_model, data),
                 None,
             )
         data, _ = jax.lax.scan(f, data, (), self._physics_steps_per_control_step)
         obs = self._get_obs(data, last_data, last_last_data)
-        reward, done = self._get_reward_done(data, last_dist_goal)
+        reward, done = self._get_reward_done(data, last_data)
         cost = self._get_cost(data)
         info = {}
         info['cost'] = cost
-        
+        qpos_reset = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1, maxval=1)
+        ctrl_reset = jp.zeros(self.mjx_model.nu)
+        qvel_reset = jp.zeros(self.mjx_model.nv)
+        qpos = jp.where(done > 0.0, x = qpos_reset, y = data.qpos)
+        ctrl = jp.where(done > 0.0, x = ctrl_reset, y = data.ctrl)
+        qvel = jp.where(done > 0.0, x = qvel_reset, y = data.qvel)
+        data = data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
         return obs, reward, done, info, data
    
 
@@ -237,15 +265,16 @@ class Engine(gym.Env, gym.utils.EzPickle):
 
     def reset(self):
         ''' Reset the physics simulation and return observation '''
-        obs, self.data= self._reset(self.key)
+        obs, reward, done, info, self.data = self._reset(self.key)
         return jax_to_torch(obs)
     
     def step(self, action):
         ''' Take a step and return observation, reward, done, and info '''
         action = torch_to_jax(action)
+        
         self.key,_ = jax.random.split(self.key, 2)
-        obs, self.data= self._step(self.data, action, self.key)
-        print(self.data.xpos.shape)
+        self.update_data()
+        obs, reward, done, info, self.data= self._step(self.data, action, self.key)
         return jax_to_torch(obs)
     
     def build_layout(self, rng):
@@ -350,11 +379,16 @@ class Engine(gym.Env, gym.utils.EzPickle):
         
         # get the raw joint info current frame 
         #! TODO: check jpos and following correctness
-        jpos = data.jpos[self.body_name2id['robot'],:]
-        jvel = data.jvel[self.body_name2id['robot'],:]
-        jacc = data.jacc[self.body_name2id['robot'],:]
+        jpos = data.qpos[:2]
+        jvel = data.qvel[:2]
+        jacc = data.qacc[:2]
+
         
         # get the raw position data of previous frames
+        if last_data is None:
+            last_data = data
+        if last_last_data is None:
+            last_last_data = last_data
         robot_pos_last = last_data.xpos[self.body_name2id['robot'],:]
         robot_pos_last_last = last_last_data.xpos[self.body_name2id['robot'],:]
         
@@ -395,13 +429,16 @@ class Engine(gym.Env, gym.utils.EzPickle):
             - close objects occlude far objects
             - constant size observation with variable numbers of objects
             '''
-            
+            positions = positions.reshape(-1, 3)
             obs = jp.zeros(self.lidar_num_bins)
             for pos in positions:
                 pos = jp.asarray(pos)
                 if pos.shape == (3,):
                     pos = pos[:2] # Truncate Z coordinate
-                z = ego_xy(pos) # (X, Y) to be treated as real, imaginary components
+                try:
+                    z = ego_xy(pos) # (X, Y) to be treated as real, imaginary components
+                except:
+                    import ipdb;ipdb.set_trace()
                 dist = jp.linalg.norm(z) # shape = B
                 angle = jax_angle(real_part=z[0], imag_part=z[1]) % (jp.pi * 2) # shape = B
                 bin_size = (jp.pi * 2) / self.lidar_num_bins
@@ -419,7 +456,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
                 # this is to make the neighborhood bins has sense of the what's happending in the bin that has obstacle
                 if self.lidar_alias:
                     alias_jp = (angle - bin_angle) / bin_size
-                    assert 0 <= alias_jp <= 1, f'bad alias_jp {alias_jp}, dist {dist}, angle {angle}, bin {bin}'
+                    # assert 0 <= alias_jp <= 1, f'bad alias_jp {alias_jp}, dist {dist}, angle {angle}, bin {bin}'
                     bin_plus = (bin + 1) % self.lidar_num_bins
                     bin_minus = (bin - 1) % self.lidar_num_bins
                     obs = obs.at[bin_plus].set(jp.maximum(obs[bin_plus], alias_jp * sensor))
@@ -451,28 +488,37 @@ class Engine(gym.Env, gym.utils.EzPickle):
 
         # concatenate processed data for different objects together 
         obs = jp.concatenate([jpos, jvel, jacc, vel_vec, acc_vec, hazards_lidar, goal_lidar])
+        # obs = jp.concatenate([vel_vec, acc_vec, hazards_lidar, goal_lidar])
         return obs
 
-    def _get_reward_done(self, data: mjx.Data, last_dist_goal: mjx.Data) -> Tuple[jp.ndarray, jp.bool_]:        
+    def get_goal_pos(self, data: mjx.Data) -> jp.ndarray:
+            robot_pos = data.xpos[self.body_name2id['robot'],:]
+            goal_pos = data.xpos[self.body_name2id['goal'],:]
+            dist_goal = jp.sqrt(jp.sum(jp.square(goal_pos[:2] - robot_pos[:2]))) 
+            return dist_goal
+
+    def _get_reward_done(self, data: mjx.Data, last_data: mjx.Data) -> Tuple[jp.ndarray, jp.ndarray]:        
         # get raw data of robot pos and goal pos
-        robot_pos = data.xpos[self.body_name2idx['robot'],:]
-        goal_pos = data.xpos[self.body_name2id['goal'],:]
-        assert robot_pos.shape == (3,) and goal_pos.shape == (3,)
-        # Return the distance from the robot to an XY position
-        dist_goal = jp.sqrt(jp.sum(jp.square(goal_pos[:2] - robot_pos[:2]))) 
         
-        reward += (last_dist_goal - dist_goal) * self.reward_distance
-        if dist_goal < self.goal_size:
-            done = jp.array(True)
-        else:
-            done = jp.array(False)
+        
+            
+        # last_robot_pos = last_data.xpos[self.body_name2id['robot'],:]
+        # last_goal_pos = last_data.xpos[self.body_name2id['goal'],:]
+        # assert robot_pos.shape == (3,) and goal_pos.shape == (3,)
+        # # Return the distance from the robot to an XY position
+        # dist_goal = jp.sqrt(jp.sum(jp.square(goal_pos[:2] - robot_pos[:2]))) 
+        # last_dist_goal = jp.sqrt(jp.sum(jp.square(last_goal_pos[:2] - last_robot_pos[:2]))) 
+        dist_goal = self.get_goal_pos(data)
+        last_dist_goal = self.get_goal_pos(last_data)
+        reward = (last_dist_goal - dist_goal) * self.reward_distance
+        done = jp.where(dist_goal < self.goal_size, x = 1.0, y = 0.0)
         #! TODO: update the last dist goal 
         return reward, done
     
     def _get_cost(self, data: mjx.Data) -> jp.ndarray:
         # get the raw position data of different objects current frame 
-        robot_pos = data.xpos[self.body_name2id['robot'],:]
-        hazard_pos = data.xpos[self.body_name2id['hazards'],:]
+        robot_pos = data.xpos[self.body_name2id['robot'],:].reshape(-1,3)
+        hazard_pos = data.xpos[self.body_name2id['hazards'],:].reshape(-1,3)
         dist_robot2hazard = jp.linalg.norm(hazard_pos[:,:2] - robot_pos[:,:2], axis=1)
         dist_robot2hazard_below_threshold = jp.maximum(dist_robot2hazard, self.hazards_size)
         cost = jp.sum(self.hazards_size*jp.ones(dist_robot2hazard_below_threshold.shape) - dist_robot2hazard_below_threshold)

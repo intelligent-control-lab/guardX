@@ -21,7 +21,7 @@
 			<geom name="pointarrow" pos="0.1 0 0" size="0.05 0.05 0.05" type="sphere"></geom>
 			<site name="robot" rgba="1 0 0 .1"></site>
 		</body>
-		<body name="goal" pos="1.195723030703368 -1.1370608203833645 0.26" quat="0.8917140993290078 0.0 0.0 0.4525991218041153">
+		<body name="goal" pos="0.8 -0.6 0.26" quat="0.8917140993290078 0.0 0.0 0.4525991218041153">
 			<joint type="slide" axis="1 0 0" name="x_goal" damping="0"/>
             <joint type="slide" axis="0 1 0" name="y_goal" damping="0"/>
 			<geom name="goal" type="sphere" size="0.5" rgba="0.0 1.0 0.0 0.25" group="0" contype="0" conaffinity="0"></geom>

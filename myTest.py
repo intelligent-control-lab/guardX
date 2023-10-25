@@ -7,11 +7,11 @@ env = Engine()
 obs = env.reset()
 t = time.time()
 print("start")
-while 1:
+for i in range(1000):
     act = 10 * (torch.rand(env.action_space.shape) - 0.5)
     obs = env.step(act)
-    env.render()
-print("finish ", time.time() - t)
+    # env.render()
+print("finish ", time.time() - t, obs.shape, obs[0].shape)
 # import jax
 # from jax import numpy as jp
 # import mujoco
