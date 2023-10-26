@@ -78,7 +78,7 @@ class TRPOBufferX:
         The "done" argument indicates which environment should be considered
         for finish_path.
         """ 
-        if self.path_start_idx.all() == 0 and self.ptr.all() == self.max_ep_len:
+        if np.all(self.path_start_idx == 0) and np.all(self.ptr == self.max_ep_len):
             # simplest case, all enviroment is done at end batch episode, 
             # proceed with batch operation
             assert last_val.shape == (self.env_num, 1)
