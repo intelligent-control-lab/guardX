@@ -75,9 +75,8 @@ class TRPOBufferX:
         This allows us to bootstrap the reward-to-go calculation to account
         for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
         
-        The "done" argument indicates whether the trajectory ended because the
-        agent reached a terminal state (died), or because the trajectory is cutoff.
-        1 means terminal state, 0 means trajectory cut off.
+        The "done" argument indicates which environment should be considered
+        for finish_path.
         """ 
         if self.path_start_idx.all() == 0 and self.ptr.all() == self.max_ep_len:
             # simplest case, all enviroment is done at end batch episode, 
@@ -89,7 +88,6 @@ class TRPOBufferX:
             # the next two lines implement GAE-Lambda advantage calculation
             deltas = rews[:,:-1] + self.gamma * vals[:,1:] - vals[:,:-1]
             self.adv_buf = torch.from_numpy(core.batch_discount_cumsum(deltas, self.gamma * self.lam)).to(device)
-            
             
             # the next line computes rewards-to-go, to be targets for the value function
             self.ret_buf = torch.from_numpy(core.batch_discount_cumsum(rews, self.gamma)[:,:-1]).to(device)
