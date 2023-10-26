@@ -1,17 +1,33 @@
-from safe_rl_envs.engine import Engine
-from safe_rl_envs.utils.mjx_device import device_put
+from safe_rl_envs.envs.engine import Engine
+from safe_rl_envs.envs.mjx_device import device_put
+import numpy as np
 
 import torch
 import time
-env = Engine()
+import cv2
+import mediapy as media
+config = {'num_envs':1}
+env = Engine(config)
 obs = env.reset()
+
 t = time.time()
 print("start")
+images = []
 for i in range(1000):
-    act = 10 * (torch.rand(env.action_space.shape) - 0.5)
+# while 1:
+    act = np.random.uniform(-1,1,(env.action_space.shape))
+    # act = 2 * (torch.rand(env.action_space.shape) - 0.5)
+    act = torch.from_numpy(act)
     obs = env.step(act)
-    # env.render()
-print("finish ", time.time() - t, obs.shape, obs[0].shape)
+    images.append(env.render())
+print("finish ", time.time() - t)
+print(obs.shape)
+print(len(images), images[0].shape)
+path = '/home/yifan/guardX/guardX/video.mp4'
+video_writer = cv2.VideoWriter(path,
+                                cv2.VideoWriter_fourcc(*'FMP4'), fps=60.0, dsize = (1920,1080))
+media.write_video('/home/yifan/guardX/guardX/video.mp4', images, fps=60.0)
+
 # import jax
 # from jax import numpy as jp
 # import mujoco
