@@ -10,7 +10,7 @@ import trpo_core as core
 from safe_rl_lib.utils.logx import EpochLogger, setup_logger_kwargs, colorize
 from safe_rl_lib.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from safe_rl_lib.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
-from safe_rl_envs.engine import Engine as  safe_rl_envs_Engine
+from safe_rl_envs.envs.engine import Engine as  safe_rl_envs_Engine
 from safe_rl_lib.utils.safe_rl_env_config import configuration
 import os.path as osp
 
@@ -27,15 +27,15 @@ class TRPOBufferX:
     """
 
     def __init__(self, env_num, max_ep_len, obs_dim, act_dim, gamma=0.99, lam=0.95):
-        self.obs_buf = torch.zeros(core.combined_shape(env_num, max_ep_len, obs_dim), dtype=torch.float32).to(device)
-        self.act_buf = torch.zeros(core.combined_shape(env_num, max_ep_len, act_dim), dtype=torch.float32).to(device)
+        self.obs_buf = torch.zeros(core.combined_shape(env_num, (max_ep_len, obs_dim[0])), dtype=torch.float32).to(device)
+        self.act_buf = torch.zeros(core.combined_shape(env_num, (max_ep_len, act_dim[0])), dtype=torch.float32).to(device)
         self.adv_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
         self.rew_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
         self.ret_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
         self.val_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
         self.logp_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
-        self.mu_buf = torch.zeros(core.combined_shape(env_num, max_ep_len, act_dim), dtype=torch.float32).to(device)
-        self.logstd_buf = torch.zeros(core.combined_shape(env_num, max_ep_len, act_dim), dtype=torch.float32).to(device)
+        self.mu_buf = torch.zeros(core.combined_shape(env_num, (max_ep_len, act_dim[0])), dtype=torch.float32).to(device)
+        self.logstd_buf = torch.zeros(core.combined_shape(env_num, (max_ep_len, act_dim[0])), dtype=torch.float32).to(device)
         self.gamma, self.lam = gamma, lam
         self.ptr = np.zeros(env_num, dtype=np.int16)
         self.path_start_idx = np.zeros(env_num, dtype=np.int16)
@@ -48,7 +48,7 @@ class TRPOBufferX:
         All input are env_num batch elements. E.g. shape(obs) = (env_num, obs_shape).
         """
         # all all environments should have run same steps, and buffer has to have room so you can store     
-        assert self.ptr.all() == self.ptr[0]
+        assert len(set(self.ptr)) == 1
         assert self.ptr[0] < self.max_ep_len
         ptr = self.ptr[0]
         self.obs_buf[:,ptr,:] = obs
@@ -87,10 +87,10 @@ class TRPOBufferX:
             
             # the next two lines implement GAE-Lambda advantage calculation
             deltas = rews[:,:-1] + self.gamma * vals[:,1:] - vals[:,:-1]
-            self.adv_buf = torch.from_numpy(core.batch_discount_cumsum(deltas, self.gamma * self.lam)).to(device)
+            self.adv_buf = torch.from_numpy(core.batch_discount_cumsum(deltas, self.gamma * self.lam).astype(np.float32)).to(device)
             
             # the next line computes rewards-to-go, to be targets for the value function
-            self.ret_buf = torch.from_numpy(core.batch_discount_cumsum(rews, self.gamma)[:,:-1]).to(device)
+            self.ret_buf = torch.from_numpy(core.batch_discount_cumsum(rews, self.gamma)[:,:-1].astype(np.float32)).to(device)
             
         else:
             # path slice are different for each environment, 
@@ -103,10 +103,12 @@ class TRPOBufferX:
                 
                 # the next two lines implement GAE-Lambda advantage calculation
                 deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
-                self.adv_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(deltas, self.gamma * self.lam)).to(device)
                 
+                self.adv_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(deltas, self.gamma * self.lam).astype(np.float32)).to(device)
+
                 # the next line computes rewards-to-go, to be targets for the value function
-                self.ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(rews, self.gamma)[:-1]).to(device)
+                
+                self.ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(rews, self.gamma)[:-1].astype(np.float32)).to(device)
                 
                 self.path_start_idx[done_env_idx] = self.ptr[done_env_idx]
         
@@ -116,20 +118,22 @@ class TRPOBufferX:
         the buffer, with advantages appropriately normalized (shifted to have
         mean zero and std one). Also, resets some pointers in the buffer.
         """
-        assert self.ptr == self.max_ep_len    # buffer has to be full before you can get
+        assert len(set(self.ptr)) == 1
+        assert self.ptr[0] == self.max_ep_len    # buffer has to be full before you can get
         self.ptr = np.zeros(self.env_num, dtype=np.int16)
         self.path_start_idx = np.zeros(self.env_num, dtype=np.int16)
         # the next two lines implement the advantage normalization trick
         def normalized_advantage(adv_buf_instance):
             adv_mean, adv_std = mpi_statistics_scalar(adv_buf_instance)
             adv_buf_instance = (adv_buf_instance - adv_mean) / adv_std
+            return adv_buf_instance
         self.adv_buf = torch.from_numpy(np.asarray([normalized_advantage(adv_buf_instance) for adv_buf_instance in self.adv_buf.cpu().numpy()])).to(device)
         
         data = dict(obs=self.obs_buf.view(self.env_num * self.max_ep_len, self.obs_buf.shape[-1]), 
                     act=self.act_buf.view(self.env_num * self.max_ep_len, self.act_buf.shape[-1]),
                     ret=self.ret_buf.view(self.env_num * self.max_ep_len),
                     adv=self.adv_buf.view(self.env_num * self.max_ep_len),
-                    logp=self.logp_buf.ep_len(self.env_num * self.max_ep_len),
+                    logp=self.logp_buf.view(self.env_num * self.max_ep_len),
                     mu=self.mu_buf.view(self.env_num * self.max_ep_len, self.mu_buf.shape[-1]),
                     logstd=self.logstd_buf.view(self.env_num * self.max_ep_len, self.logstd_buf.shape[-1]),
         )
@@ -454,29 +458,31 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # collect experience with batch environment (env_num) for maximum episode length
         for t in range(max_ep_len):
             # ac takes observation 
-            a, v, logp, mu, logstd = ac.step(torch.as_tensor(o, dtype=torch.float32))
+            act, v, logp, mu, logstd = ac.step(torch.as_tensor(o, dtype=torch.float32))
             
             # step actions
-            next_o, r, d, info = env.step(a)
-            assert 'cost' in info[0].keys()
+            next_o, r, d, info = env.step(act)
+            assert 'cost' in info.keys()
             
             # Track cumulative cost over training
-            cum_cost += np.asarray([info_episode['cost'].cpu().numpy().squeeze() for info_episode in info]).sum()
+            # cum_cost += np.asarray([info_episode.cpu().numpy().squeeze() for info_episode in info['cost']]).sum()
+            cum_cost += info['cost'].cpu().numpy().squeeze().sum()
             
             # update return, length, cost of env_num batch episodes
             ep_ret += r.cpu().numpy().squeeze()
             ep_len += 1
-            ep_cost += np.asarray([info_episode['cost'].cpu().numpy().squeeze() for info_episode in info])
+            # ep_cost += np.asarray([info_episode.cpu().numpy().squeeze() for info_episode in info['cost']])
+            assert ep_cost.shape == info['cost'].cpu().numpy().squeeze().shape
+            ep_cost += info['cost'].cpu().numpy().squeeze()
 
             # save and log
-            buf.store(o, a, r, v, logp, mu, logstd)
+            buf.store(o, act, r, v, logp, mu, logstd)
             logger.store(VVals=v.cpu().numpy())
             
             # Update obs (critical!)
             o = next_o
 
-            assert ep_len.all() == ep_len[0]
-            timeout = ep_len.all() == max_ep_len
+            timeout = (t + 1) == max_ep_len
             terminal = d.cpu().numpy().any() > 0 or timeout
 
             if terminal:
@@ -484,7 +490,10 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 _, v, _, _, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
                 if timeout:
                     done = np.ones(env_num) # every environment needs to finish path
-                    logger.store(EpRet=ep_ret, EpLen=ep_len, EpCost=ep_cost)
+                    # logger.store(EpRet=ep_ret, EpLen=ep_len, EpCost=ep_cost)
+                    logger.store(EpRet=ep_ret[np.where(ep_len == max_ep_len)],
+                                 EpLen=ep_len[np.where(ep_len == max_ep_len)],
+                                 EpCost=ep_cost[np.where(ep_len == max_ep_len)])
                     buf.finish_path(v, done)
                     # reset environment 
                     o = env.reset()
@@ -492,7 +501,8 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 else:
                     # trajectory finished for some environment
                     done = d.cpu().numpy() # finish path for certain environments
-                    v[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0],1)
+                    v[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0]).to(device)
+                    
                     logger.store(EpRet=ep_ret[np.where(done == 1)], EpLen=ep_len[np.where(done == 1)], EpCost=ep_cost[np.where(done == 1)])
                     ep_ret[np.where(done == 1)], ep_len[np.where(done == 1)], ep_cost[np.where(done == 1)]\
                         =   np.zeros(np.where(done == 1)[0].shape[0]), \
@@ -515,6 +525,7 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         cost_rate = cumulative_cost / ((epoch+1)*local_steps_per_epoch)
 
         # Log info about epoch
+        # import ipdb;ipdb.set_trace()
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpCost', with_min_and_max=True)
@@ -537,7 +548,8 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 def create_env(args):
     # env =  safe_rl_envs_Engine(configuration(args.task))
     #! TODO: make engine configurable
-    env = safe_rl_envs_Engine()
+    config = {'num_envs':args.env_num}
+    env = safe_rl_envs_Engine(config)
     return env
 
 if __name__ == '__main__':
@@ -550,9 +562,9 @@ if __name__ == '__main__':
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=1)
     # parser.add_argument('--steps', type=int, default=30000)
-    parser.add_argument('--env_num', type=int, default=100)
+    parser.add_argument('--env_num', type=int, default=200)
     parser.add_argument('--max_ep_len', type=int, default=1000)
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--exp_name', type=str, default='trpo')
     parser.add_argument('--model_save', action='store_true')
     parser.add_argument('--target_kl', type=float, default=0.02)
