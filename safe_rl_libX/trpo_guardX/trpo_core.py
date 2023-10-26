@@ -56,6 +56,18 @@ def discount_cumsum(x, discount):
     """
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
+def batch_discount_cumsum(x, discount):
+    """the batch discounted cumulative sums of vectors, using magic from rllab
+
+    Args:
+        x (torch.tensor): vector x, shape = (B,length)
+        discount (float): the discount factor
+
+    Returns:
+        torch.tensor: the batch discounted cumulative sums of vectors, shape = (B,length)
+    """
+    return np.asarray([discount_cumsum(x_row, discount) for x_row in x.cpu().numpy()])
+
 
 class Actor(nn.Module):
 

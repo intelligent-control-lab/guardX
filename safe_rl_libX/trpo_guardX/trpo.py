@@ -7,51 +7,60 @@ import gym
 import time
 import copy
 import trpo_core as core
-from utils.logx import EpochLogger, setup_logger_kwargs, colorize
-from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
-from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
-from  safe_rl_envs.engine import Engine as  safe_rl_envs_Engine
-from utils.safe_rl_env_config import configuration
+from safe_rl_lib.utils.logx import EpochLogger, setup_logger_kwargs, colorize
+from safe_rl_lib.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
+from safe_rl_lib.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
+from safe_rl_envs.engine import Engine as  safe_rl_envs_Engine
+from safe_rl_lib.utils.safe_rl_env_config import configuration
 import os.path as osp
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 EPS = 1e-8
 
-class TRPOBuffer:
+class TRPOBufferX:
     """
     A buffer for storing trajectories experienced by a PPO agent interacting
     with the environment, and using Generalized Advantage Estimation (GAE-Lambda)
-    for calculating the advantages of state-action pairs.
+    for calculating the advantages of state-action pairs. Upgraded for guardX to enable batch observation processing.
+    
+    Important notice! This bufferX assumes only one batch of episodes is collected per epoch.
     """
 
-    def __init__(self, obs_dim, act_dim, size, gamma=0.99, lam=0.95):
-        self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
-        self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
-        self.adv_buf = np.zeros(size, dtype=np.float32)
-        self.rew_buf = np.zeros(size, dtype=np.float32)
-        self.ret_buf = np.zeros(size, dtype=np.float32)
-        self.val_buf = np.zeros(size, dtype=np.float32)
-        self.logp_buf = np.zeros(size, dtype=np.float32)
-        self.mu_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
-        self.logstd_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
+    def __init__(self, env_num, max_ep_len, obs_dim, act_dim, gamma=0.99, lam=0.95):
+        self.obs_buf = torch.zeros(core.combined_shape(env_num, max_ep_len, obs_dim), dtype=torch.float32).to(device)
+        self.act_buf = torch.zeros(core.combined_shape(env_num, max_ep_len, act_dim), dtype=torch.float32).to(device)
+        self.adv_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
+        self.rew_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
+        self.ret_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
+        self.val_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
+        self.logp_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
+        self.mu_buf = torch.zeros(core.combined_shape(env_num, max_ep_len, act_dim), dtype=torch.float32).to(device)
+        self.logstd_buf = torch.zeros(core.combined_shape(env_num, max_ep_len, act_dim), dtype=torch.float32).to(device)
         self.gamma, self.lam = gamma, lam
-        self.ptr, self.path_start_idx, self.max_size = 0, 0, size
+        self.ptr = np.zeros(env_num, dtype=np.int16)
+        self.path_start_idx = np.zeros(env_num, dtype=np.int16)
+        self.max_ep_len = max_ep_len
+        self.env_num = env_num
 
     def store(self, obs, act, rew, val, logp, mu, logstd):
         """
         Append one timestep of agent-environment interaction to the buffer.
+        All input are env_num batch elements. E.g. shape(obs) = (env_num, obs_shape).
         """
-        assert self.ptr < self.max_size     # buffer has to have room so you can store
-        self.obs_buf[self.ptr] = obs
-        self.act_buf[self.ptr] = act
-        self.rew_buf[self.ptr] = rew
-        self.val_buf[self.ptr] = val
-        self.logp_buf[self.ptr] = logp
-        self.mu_buf[self.ptr] = mu
-        self.logstd_buf[self.ptr] = logstd
+        # all all environments should have run same steps, and buffer has to have room so you can store     
+        assert self.ptr.all() == self.ptr[0]
+        assert self.ptr[0] < self.max_ep_len
+        ptr = self.ptr[0]
+        self.obs_buf[:,ptr,:] = obs
+        self.act_buf[:,ptr,:] = act
+        self.rew_buf[:,ptr] = rew
+        self.val_buf[:,ptr] = val
+        self.logp_buf[:,ptr] = logp
+        self.mu_buf[:,ptr,:] = mu
+        self.logstd_buf[:,ptr,:] = logstd
         self.ptr += 1
 
-    def finish_path(self, last_val=0):
+    def finish_path(self, last_val=None, done=None):
         """
         Call this at the end of a trajectory, or when one gets cut off
         by an epoch ending. This looks back in the buffer to where the
@@ -60,46 +69,74 @@ class TRPOBuffer:
         as well as compute the rewards-to-go for each state, to use as
         the targets for the value function.
 
-        The "last_val" argument should be 0 if the trajectory ended
+        The "last_val" argument row entry should be 0 if the trajectory ended
         because the agent reached a terminal state (died), and otherwise
         should be V(s_T), the value function estimated for the last state.
         This allows us to bootstrap the reward-to-go calculation to account
         for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
-        """
-
-        path_slice = slice(self.path_start_idx, self.ptr)
-        rews = np.append(self.rew_buf[path_slice], last_val)
-        vals = np.append(self.val_buf[path_slice], last_val)
         
-        # the next two lines implement GAE-Lambda advantage calculation
-        deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
-        self.adv_buf[path_slice] = core.discount_cumsum(deltas, self.gamma * self.lam)
+        The "done" argument indicates whether the trajectory ended because the
+        agent reached a terminal state (died), or because the trajectory is cutoff.
+        1 means terminal state, 0 means trajectory cut off.
+        """ 
+        if self.path_start_idx.all() == 0 and self.ptr.all() == self.max_ep_len:
+            # simplest case, all enviroment is done at end batch episode, 
+            # proceed with batch operation
+            assert last_val.shape == (self.env_num, 1)
+            rews = torch.hstack((self.rew_buf, last_val))
+            vals = torch.hstack((self.val_buf, last_val))
+            
+            # the next two lines implement GAE-Lambda advantage calculation
+            deltas = rews[:,:-1] + self.gamma * vals[:,1:] - vals[:,:-1]
+            self.adv_buf = torch.from_numpy(core.batch_discount_cumsum(deltas, self.gamma * self.lam)).to(device)
+            
+            
+            # the next line computes rewards-to-go, to be targets for the value function
+            self.ret_buf = torch.from_numpy(core.batch_discount_cumsum(rews, self.gamma)[:,:-1]).to(device)
+            
+        else:
+            # path slice are different for each environment, 
+            # separate treatement is required for each environment
+            done_env_idx_all = np.where(done == 1)[0]
+            for done_env_idx in done_env_idx_all:
+                path_slice = slice(self.path_start_idx[done_env_idx], self.ptr[done_env_idx])
+                rews = np.append(self.rew_buf[done_env_idx, path_slice].cpu().numpy(), last_val[done_env_idx].cpu().numpy())
+                vals = np.append(self.val_buf[done_env_idx, path_slice].cpu().numpy(), last_val[done_env_idx].cpu().numpy())
+                
+                # the next two lines implement GAE-Lambda advantage calculation
+                deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
+                self.adv_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(deltas, self.gamma * self.lam)).to(device)
+                
+                # the next line computes rewards-to-go, to be targets for the value function
+                self.ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(rews, self.gamma)[:-1]).to(device)
+                
+                self.path_start_idx[done_env_idx] = self.ptr[done_env_idx]
         
-        # the next line computes rewards-to-go, to be targets for the value function
-        self.ret_buf[path_slice] = core.discount_cumsum(rews, self.gamma)[:-1]
-        
-        self.path_start_idx = self.ptr
-
     def get(self):
         """
         Call this at the end of an epoch to get all of the data from
         the buffer, with advantages appropriately normalized (shifted to have
         mean zero and std one). Also, resets some pointers in the buffer.
         """
-        assert self.ptr == self.max_size    # buffer has to be full before you can get
-        self.ptr, self.path_start_idx = 0, 0
+        assert self.ptr == self.max_ep_len    # buffer has to be full before you can get
+        self.ptr = np.zeros(self.env_num, dtype=np.int16)
+        self.path_start_idx = np.zeros(self.env_num, dtype=np.int16)
         # the next two lines implement the advantage normalization trick
-        adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
-        self.adv_buf = (self.adv_buf - adv_mean) / adv_std
-        data = dict(obs=torch.FloatTensor(self.obs_buf).to(device), 
-                    act=torch.FloatTensor(self.act_buf).to(device), 
-                    ret=torch.FloatTensor(self.ret_buf).to(device),
-                    adv=torch.FloatTensor(self.adv_buf).to(device), 
-                    logp=torch.FloatTensor(self.logp_buf).to(device),
-                    mu=torch.FloatTensor(self.mu_buf).to(device),
-                    logstd=torch.FloatTensor(self.logstd_buf).to(device),
+        def normalized_advantage(adv_buf_instance):
+            adv_mean, adv_std = mpi_statistics_scalar(adv_buf_instance)
+            adv_buf_instance = (adv_buf_instance - adv_mean) / adv_std
+        self.adv_buf = torch.from_numpy(np.asarray([normalized_advantage(adv_buf_instance) for adv_buf_instance in self.adv_buf.cpu().numpy()])).to(device)
+        
+        data = dict(obs=self.obs_buf.view(self.env_num * self.max_ep_len, self.obs_buf.shape[-1]), 
+                    act=self.act_buf.view(self.env_num * self.max_ep_len, self.act_buf.shape[-1]),
+                    ret=self.ret_buf.view(self.env_num * self.max_ep_len),
+                    adv=self.adv_buf.view(self.env_num * self.max_ep_len),
+                    logp=self.logp_buf.ep_len(self.env_num * self.max_ep_len),
+                    mu=self.mu_buf.view(self.env_num * self.max_ep_len, self.mu_buf.shape[-1]),
+                    logstd=self.logstd_buf.view(self.env_num * self.max_ep_len, self.logstd_buf.shape[-1]),
         )
-        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
+        # return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
+        return {k: v for k,v in data.items()}
 
 
 def get_net_param_np_vec(net):
@@ -288,8 +325,10 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up experience buffer
     # local_steps_per_epoch = int(steps_per_epoch / num_procs())
-    local_steps_per_epoch = max_ep_len * env_num # local step per epoch equals all the environment parallely run maximum episode length
-    buf = TRPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
+    local_steps_per_epoch = int(max_ep_len * env_num / num_procs()) # local step per epoch equals all the environment parallely run maximum episode length
+    buf = TRPOBufferX(env_num, max_ep_len, obs_dim, act_dim, gamma, lam)
+    
+    #! TODO: make sure max_ep_len of buffer is the same with the max_ep_len setting from environment, error if not
 
 
     def compute_kl_pi(data, cur_pi):
@@ -404,68 +443,65 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Prepare for interaction with environment
     start_time = time.time()
-    # o, ep_ret, ep_len = env.reset(), 0, 0
-    while True:
-        try:
-            o, ep_ret, ep_len = env.reset(), 0, 0
-            break
-        except:
-            print('reset environment is wrong, try next reset')
-    ep_cost, cum_cost = 0, 0
+
+    # reset environment
+    o = env.reset()
+    # return, length, cost of env_num batch episodes
+    ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num) 
+    # cum_cost is the cumulative cost over the training
+    cum_cost = 0 
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         # collect experience with batch environment (env_num) for maximum episode length
         for t in range(max_ep_len):
-            # a, v, logp, mu, logstd = ac.step(torch.as_tensor(o, dtype=torch.float32))
+            # ac takes observation 
             a, v, logp, mu, logstd = ac.step(torch.as_tensor(o, dtype=torch.float32))
-                    
-            try: 
-                next_o, r, d, info = env.step(a)
-                assert 'cost' in info.keys()
-            except: 
-                # simulation exception discovered, discard this episode 
-                next_o, r, d = o, 0, True # observation will not change, no reward when episode done 
-                info['cost'] = 0 # no cost when episode done 
+            
+            # step actions
+            next_o, r, d, info = env.step(a)
+            assert 'cost' in info[0].keys()
             
             # Track cumulative cost over training
-            cum_cost += info['cost']
+            cum_cost += np.asarray([info_episode['cost'].cpu().numpy().squeeze() for info_episode in info]).sum()
             
-            ep_ret += r
+            # update return, length, cost of env_num batch episodes
+            ep_ret += r.cpu().numpy().squeeze()
             ep_len += 1
-            ep_cost += info['cost']
+            ep_cost += np.asarray([info_episode['cost'].cpu().numpy().squeeze() for info_episode in info])
 
             # save and log
             buf.store(o, a, r, v, logp, mu, logstd)
-            logger.store(VVals=v)
+            logger.store(VVals=v.cpu().numpy())
             
             # Update obs (critical!)
             o = next_o
 
-            timeout = ep_len == max_ep_len
-            terminal = d or timeout
-            epoch_ended = t==local_steps_per_epoch-1
+            assert ep_len.all() == ep_len[0]
+            timeout = ep_len.all() == max_ep_len
+            terminal = d.cpu().numpy().any() > 0 or timeout
 
-            if terminal or epoch_ended:
-                if epoch_ended and not(terminal):
-                    print('Warning: trajectory cut off by epoch at %d steps.'%ep_len, flush=True)
+            if terminal:
                 # if trajectory didn't reach terminal state, bootstrap value target
-                if timeout or epoch_ended:
-                    _, v, _, _, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
-                else:
-                    v = 0
-                buf.finish_path(v)
-                if terminal:
-                    # only save EpRet / EpLen / EpCost if trajectory finished
+                _, v, _, _, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
+                if timeout:
+                    done = np.ones(env_num) # every environment needs to finish path
                     logger.store(EpRet=ep_ret, EpLen=ep_len, EpCost=ep_cost)
-                # o, ep_ret, ep_len = env.reset(), 0, 0
-                while True:
-                    try:
-                        o, ep_ret, ep_len = env.reset(), 0, 0
-                        break
-                    except:
-                        print('reset environment is wrong, try next reset')
-                ep_cost = 0 # episode cost is zero 
+                    buf.finish_path(v, done)
+                    # reset environment 
+                    o = env.reset()
+                    ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num)
+                else:
+                    # trajectory finished for some environment
+                    done = d.cpu().numpy() # finish path for certain environments
+                    v[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0],1)
+                    logger.store(EpRet=ep_ret[np.where(done == 1)], EpLen=ep_len[np.where(done == 1)], EpCost=ep_cost[np.where(done == 1)])
+                    ep_ret[np.where(done == 1)], ep_len[np.where(done == 1)], ep_cost[np.where(done == 1)]\
+                        =   np.zeros(np.where(done == 1)[0].shape[0]), \
+                            np.zeros(np.where(done == 1)[0].shape[0]), \
+                            np.zeros(np.where(done == 1)[0].shape[0])
+                    
+                    buf.finish_path(v, done)
 
         # Save model
         if ((epoch % save_freq == 0) or (epoch == epochs-1)) and model_save:
@@ -497,7 +533,7 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('KL', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
         logger.log_tabular('EpochS', average_only=True)
-        logger.dump_tabular()
+        logger.dump_tabular() # flush logger data for this epoch
         
         
 def create_env(args):
