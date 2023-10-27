@@ -12,10 +12,10 @@ obs = env.reset()
 t = time.time()
 print("start")
 images = []
-for i in range(1000):
-# while 1:  
-    # import ipdb;ipdb.set_trace()    
-    # act = np.random.uniform(-1,1,(env.action_space.shape))
+for i in range(600):
+# while 1:
+# test feihan push
+    act = np.random.uniform(-1,1,(env.action_space.shape))
     # act = 2 * (torch.rand(env.action_space.shape) - 0.5)
     act = torch.from_numpy(act)
     obs, reward, done, info = env.step(act)
