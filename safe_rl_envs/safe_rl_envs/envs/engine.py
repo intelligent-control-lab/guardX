@@ -72,6 +72,9 @@ ORIGIN_COORDINATES = np.zeros(3)
 DEFAULT_WIDTH = 1920
 DEFAULT_HEIGHT = 1080
 
+import os
+os.environ['XLA_PYTHON_CLIENT_PREALLOCATE']='false'
+
 class ResamplingError(AssertionError):
     ''' Raised when we fail to sample a valid distribution of objects or goals '''
     pass

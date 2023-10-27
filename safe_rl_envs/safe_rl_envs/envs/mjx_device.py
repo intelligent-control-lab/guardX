@@ -86,7 +86,7 @@ _DERIVED = mesh.DERIVED.union(
 )
 import os
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE']='false'
-# os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='.30'
+# os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='.20'
 DEVICES = jax.devices()
 
 def _model_derived(value: mujoco.MjModel, device_id: int) -> Dict[str, Any]:
