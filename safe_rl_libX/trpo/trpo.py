@@ -566,7 +566,7 @@ if __name__ == '__main__':
     parser.add_argument('--target_kl', type=float, default=0.02)
     args = parser.parse_args()
 
-    mpi_fork(args.cpu)  # run parallel code with mpi
+    mpi_fork(args.cpu)  # run parallel code with mpi 
     
     exp_name = args.task + '_' + args.exp_name + '_' + 'kl' + str(args.target_kl) \
                         + '_' + 'epochs' + str(args.epochs) + '_' \
