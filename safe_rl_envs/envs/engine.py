@@ -99,14 +99,15 @@ class Engine(gym.Env, gym.utils.EzPickle):
         # By default, only robot sensor observations are enabled.
         'observation_flatten': True,  # Flatten observation into a vector
         'observe_goal_lidar': True,  # Observe the goal with a lidar sensor
-        'observe_hazards': True,  # Observe the vector from agent to hazards
+        'observe_goal_comp': True,  # Observe a compass vector to the goal
+        'observe_hazards': False,  # Observe the vector from agent to hazards
         # These next observations are unnormalized, and are only for debugging
         'observe_qpos': True,  # Observe the qpos of the world
         'observe_qvel': True,  # Observe the qvel of the robot
         'observe_qacc': True,  # Observe the qacc of the robot
-        'observe_vel': True,  # Observe the vel of the robot
-        'observe_acc': True,  # Observe the acc of the robot
-        'observe_ctrl': False,  # Observe the previous action
+        'observe_vel': False,  # Observe the vel of the robot
+        'observe_acc': False,  # Observe the acc of the robot
+        'observe_ctrl': True,  # Observe the previous action
 
         # Render options
         'render_labels': False,
@@ -206,10 +207,10 @@ class Engine(gym.Env, gym.utils.EzPickle):
             return jax.vmap(self.mjx_reset)(rng)
         
         # Use jax.vmap to warp single environment step to batched step function
-        def batched_step(data: mjx.Data, action: jax.Array, rng: jax.Array):
+        def batched_step(data: mjx.Data, last_data: mjx.Data, last_last_data: mjx.Data, action: jax.Array, rng: jax.Array):
             if self.num_envs is not None:
                 rng = jax.random.split(rng, self.num_envs)
-            return jax.vmap(self.mjx_step)(data, self.last_data, self.last_last_data, action, rng)
+            return jax.vmap(self.mjx_step)(data, last_data, last_last_data, action, rng)
     
         self._reset = jax.jit(batched_reset) # Use Just In Time (JIT) compilation to execute batched reset efficiently
         self._step = jax.jit(batched_step) # Use Just In Time (JIT) compilation to execute batched step efficiently
@@ -222,8 +223,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
         ctrl_range = self.mj_model.actuator_ctrlrange
         ctrl_range[~(self.mj_model.actuator_ctrllimited == 1), :] = np.array([-np.inf, np.inf])
         action = jax.tree_map(np.array, ctrl_range)
-        action_space = gym.spaces.Box(action[:, 0], action[:, 1], dtype=np.float32)
-        self.action_space = utils.batch_space(action_space, self.num_envs)
+        self.action_space = gym.spaces.Box(action[:, 0], action[:, 1], dtype=np.float32)
+        # self.action_space = utils.batch_space(action_space, self.num_envs)
         self.build_observation_space()
         self.body_name2id = {}
         self.body_name2id['floor'] = 0
@@ -285,6 +286,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self.robot.nu = 2
         if self.observe_goal_lidar:
             obs_space_dict['goal_lidar'] = gym.spaces.Box(0.0, 1.0, (self.lidar_num_bins,), dtype=np.float32)
+        if self.observe_goal_comp:
+            obs_space_dict['goal_compass'] = gym.spaces.Box(-np.inf, np.inf, (2,), dtype=np.float32)
         if self.observe_hazards:
             obs_space_dict['hazards_lidar'] = gym.spaces.Box(0.0, 1.0, (self.lidar_num_bins,), dtype=np.float32)
         if self.observe_qpos:
@@ -303,7 +306,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         if self.observation_flatten:
             self.obs_flat_size = sum([np.prod(i.shape) for i in self.obs_space_dict.values()])
             self.observation_space = gym.spaces.Box(-np.inf, np.inf, (self.obs_flat_size,), dtype=np.float32)
-            self.observation_space = utils.batch_space(self.observation_space, self.num_envs)
+            # self.observation_space = utils.batch_space(self.observation_space, self.num_envs)
         else:
             for k, v in self.obs_space_dict.items():
                 self.obs_space_dict[k] = utils.batch_space(v, self.num_envs)
@@ -313,8 +316,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self.key = jax.random.PRNGKey(self._seed)
 
     def update_data(self):
-        self.last_last_data = self.last_data
-        self.last_data = self.data
+        self.last_last_data = deepcopy(self.last_data)
+        self.last_data = deepcopy(self.data)
 
     def mjx_reset(self, rng):
         """ Resets an unbatched environment to an initial state."""
@@ -322,6 +325,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         data = self.mjx_data
         xpos = self.mjx_data.xpos
         xpos = xpos.at[3:].set(layout["hazards_pos"])
+        xpos = xpos.at[2].set(layout["goal_pos"][0])
         # data = data.replace(xpos=jp.zeros(self.mjx_model.nbody), qpos=jp.zeros(self.mjx_model.nq), qvel=jp.zeros(self.mjx_model.nv), ctrl=jp.zeros(self.mjx_model.nu))
         data = mjx.forward(self.mjx_model, data)
         last_data = data
@@ -357,7 +361,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         info = {}
         info['cost'] = cost
         info['obs'] = obs_dict
-        qpos_reset = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1, maxval=1)
+        qpos_reset = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1.5, maxval=1.5)
         ctrl_reset = jp.zeros(self.mjx_model.nu)
         qvel_reset = jp.zeros(self.mjx_model.nv)
         qpos = jp.where(done > 0.0, x = qpos_reset, y = data.qpos)
@@ -379,9 +383,9 @@ class Engine(gym.Env, gym.utils.EzPickle):
         
         self.key,_ = jax.random.split(self.key, 2)
         self.update_data()
-        obs, reward, done, info, self.data= self._step(self.data, action, self.key)
+        obs, reward, done, info, self.data= self._step(self.data, self.last_data, self.last_last_data, action, self.key)
         self.info = info
-        return jax_to_torch(obs)
+        return jax_to_torch(obs), jax_to_torch(reward), jax_to_torch(done), jax_to_torch(info)
     
     def build_layout(self, rng):
         ''' Rejection sample a placement of objects to find a layout. '''
@@ -389,9 +393,9 @@ class Engine(gym.Env, gym.utils.EzPickle):
         #     self.rs = np.random.RandomState(0)
         rng, rng1, rng2 = jax.random.split(rng, 3)
         
-        xpos = jax.random.uniform(rng1, (8,3), minval=self.hazards_placements[0], maxval=self.hazards_placements[1])
         layout = {}
-        layout["hazards_pos"] = xpos
+        layout["hazards_pos"] = jax.random.uniform(rng1, (8,3), minval=self.hazards_placements[0], maxval=self.hazards_placements[1])
+        layout["goal_pos"] = jax.random.uniform(rng1, (1,3), minval=-2.0, maxval=2.0)
         return layout
  
     def obs(self, data: mjx.Data, last_data: mjx.Data, last_last_data: mjx.Data):
@@ -409,6 +413,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
             obs['goal_lidar'] = self.obs_lidar(data, data.xpos[self.body_name2id['goal'],:])
         if self.observe_hazards:
             obs['hazards_lidar'] = self.obs_lidar(data, data.xpos[self.body_name2id['hazards'],:])
+        if self.observe_goal_comp:
+            obs['goal_compass'] = self.obs_compass(data, data.xpos[self.body_name2id['goal'],:])
         if self.observe_qpos:
             obs['qpos'] = data.qpos[:self.robot.nq]
         if self.observe_qvel:
@@ -447,6 +453,17 @@ class Engine(gym.Env, gym.utils.EzPickle):
         angle_rad = jp.arctan2(imag_part, real_part)
         return angle_rad
 
+    def obs_compass(self, data, pos):
+        xpos = data.xpos.reshape(-1,3)
+        xmat = data.xmat.reshape(-1,3,3)
+        robot_pos = xpos[self.body_name2id['robot'],:]
+        robot_mat = xmat[self.body_name2id['robot'],:]
+        ''' Return the egocentric XY vector to a position from the robot '''
+        if pos.shape == (3,):
+            pos = pos[:2]
+        pos_3vec = jp.concatenate([pos, jp.array([0])]) # Add a zero z-coordinate
+        world_3vec = pos_3vec - robot_pos
+        return jp.matmul(world_3vec, robot_mat)[:2] # only take XY coordinates
 
     def obs_lidar(self, data, positions):
         '''
@@ -528,8 +545,9 @@ class Engine(gym.Env, gym.utils.EzPickle):
         return vel_vec_robot_frame, acc_vec_robot_frame
 
     def goal_pos(self, data: mjx.Data) -> jp.ndarray:
-            robot_pos = data.xpos[self.body_name2id['robot'],:]
-            goal_pos = data.xpos[self.body_name2id['goal'],:]
+            xpos = data.xpos.reshape(-1,3)
+            robot_pos = xpos[self.body_name2id['robot'],:]
+            goal_pos = xpos[self.body_name2id['goal'],:]
             dist_goal = jp.sqrt(jp.sum(jp.square(goal_pos[:2] - robot_pos[:2]))) 
             return dist_goal
 
@@ -600,6 +618,33 @@ class Engine(gym.Env, gym.utils.EzPickle):
             cnt += 1
         self.viewer.user_scn.ngeom += cnt
         self.renderer_scene.ngeom += cnt
+    
+    def render_compass(self, data: mjx.Data, compass_pos, color, offset):
+        xpos = data.xpos.reshape(-1,3)
+        xmat = data.xmat.reshape(-1,3,3)
+        robot_pos = xpos[self.body_name2id['robot'],:]
+        robot_mat = xmat[self.body_name2id['robot'],:]
+        compass_pos = compass_pos.flatten()
+        compass_pos = jp.concatenate([compass_pos * 0.15, jp.array([0])])
+        pos = robot_pos + np.matmul(compass_pos, robot_mat.transpose())
+        mujoco.mjv_initGeom(
+            self.viewer.user_scn.geoms[self.viewer.user_scn.ngeom],
+            type=mujoco.mjtGeom.mjGEOM_SPHERE,
+            size=[0.02, 0, 0],
+            pos=pos.flatten(),
+            mat=np.eye(3).flatten(),
+            rgba=np.array(color) * 0.5
+            )
+        mujoco.mjv_initGeom(
+            self.renderer_scene.geoms[self.renderer_scene.ngeom],
+            type=mujoco.mjtGeom.mjGEOM_SPHERE,
+            size=[0.02, 0, 0],
+            pos=pos.flatten(),
+            mat=np.eye(3).flatten(),
+            rgba=np.array(color) * 0.5
+            )
+        self.viewer.user_scn.ngeom += 1
+        self.renderer_scene.ngeom += 1
 
     def render(self):
         data = self.mj_data
@@ -620,10 +665,10 @@ class Engine(gym.Env, gym.utils.EzPickle):
         offset = 0.5
         self.viewer.user_scn.ngeom = 0
         obs = self.info['obs']
-        
-        self.render_lidar(self.data, obs['hazards_lidar'], COLOR_HAZARD, offset)
-        offset += 0.1
-        self.render_lidar(self.data, obs['goal_lidar'], COLOR_GOAL, offset)
+        # self.render_lidar(self.data, obs['hazards_lidar'], COLOR_HAZARD, offset)
+        # offset += 0.1
+        # self.render_lidar(self.data, obs['goal_lidar'], COLOR_GOAL, offset)
+        self.render_compass(self.data, obs['goal_compass'], COLOR_GOAL, offset)
         self.viewer.sync()
         
         return self.renderer.render()

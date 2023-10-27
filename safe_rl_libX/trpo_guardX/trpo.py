@@ -562,9 +562,9 @@ if __name__ == '__main__':
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=1)
     # parser.add_argument('--steps', type=int, default=30000)
-    parser.add_argument('--env_num', type=int, default=200)
+    parser.add_argument('--env_num', type=int, default=400)
     parser.add_argument('--max_ep_len', type=int, default=1000)
-    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--exp_name', type=str, default='trpo')
     parser.add_argument('--model_save', action='store_true')
     parser.add_argument('--target_kl', type=float, default=0.02)
@@ -579,8 +579,28 @@ if __name__ == '__main__':
 
     # whether to save model
     model_save = True if args.model_save else False
-
+    t = time.time()
+    print("start")
     trpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
         seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
         logger_kwargs=logger_kwargs, model_save=model_save, target_kl=args.target_kl)
+    print("finish ", time.time() - t)
+    
+    import mediapy as media
+    model_path = '/home/yifan/guardX/guardX/safe_rl_libX/trpo_guardX/logs/Goal_Point_8Hazards_trpo_kl0.02_epochs10_step400000/Goal_Point_8Hazards_trpo_kl0.02_epochs10_step400000_s0/pyt_save/model.pt'
+    ac = torch.load(model_path)
+    config = {'num_envs': 1}
+    env = safe_rl_envs_Engine(config)
+    obs = env.reset()
+    
+    
+    images = []
+    for i in range(600): 
+        act, v, logp, _, _ = ac.step(obs)
+        obs, reward, done, info = env.step(act)
+        env.render()
+        # images.append(env.render())
+    
+    # path = '/home/yifan/guardX/guardX/video.mp4'
+    # media.write_video('/home/yifan/guardX/guardX/video.mp4', images, fps=60.0)

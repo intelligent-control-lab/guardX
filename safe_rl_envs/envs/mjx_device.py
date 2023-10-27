@@ -85,7 +85,7 @@ _DERIVED = mesh.DERIVED.union(
     {(types.Data, 'efc_J'), (types.Option, 'has_fluid_params')}
 )
 import os
-# os.environ['XLA_PYTHON_CLIENT_PREALLOCATE']='false'
+os.environ['XLA_PYTHON_CLIENT_PREALLOCATE']='false'
 # os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='.30'
 DEVICES = jax.devices()
 
