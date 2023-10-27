@@ -137,7 +137,6 @@ class TRPOBufferX:
                     mu=self.mu_buf.view(self.env_num * self.max_ep_len, self.mu_buf.shape[-1]),
                     logstd=self.logstd_buf.view(self.env_num * self.max_ep_len, self.logstd_buf.shape[-1]),
         )
-        # return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
         return {k: v for k,v in data.items()}
 
 
@@ -253,8 +252,7 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         seed (int): Seed for random number generators.
 
-        steps_per_epoch (int): Number of steps of interaction (state-action pairs) 
-            for the agent and the environment in each epoch.
+        env_num (int): Number of environment copies being run in parallel.
 
         epochs (int): Number of epochs of interaction (equivalent to
             number of policy updates) to perform.

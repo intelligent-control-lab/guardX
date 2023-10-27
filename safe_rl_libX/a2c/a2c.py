@@ -5,7 +5,7 @@ import torch
 from torch.optim import Adam
 import gym
 import time
-import ppo_core as core
+import a2c_core as core
 from safe_rl_lib.utils.logx import EpochLogger, setup_logger_kwargs
 from safe_rl_lib.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from safe_rl_lib.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
@@ -15,10 +15,9 @@ import os.path as osp
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-
-class PPOBufferX:
+class A2CBufferX:
     """
-    A buffer for storing trajectories experienced by a PPO agent interacting
+    A buffer for storing trajectories experienced by a A2C agent interacting
     with the environment, and using Generalized Advantage Estimation (GAE-Lambda)
     for calculating the advantages of state-action pairs.
     
@@ -39,7 +38,7 @@ class PPOBufferX:
         self.max_ep_len = max_ep_len
         self.env_num = env_num
 
-    def store(self, obs, act, rew, val, logp):
+    def store(self, obs, act, rew, val, logp, mu, logstd):
         """
         Append one timestep of agent-environment interaction to the buffer.
         All input are env_num batch elements. E.g. shape(obs) = (env_num, obs_shape).
@@ -54,8 +53,7 @@ class PPOBufferX:
         self.val_buf[:,ptr] = val
         self.logp_buf[:,ptr] = logp
         self.ptr += 1
-
-
+        
     def finish_path(self, last_val=None, done=None):
         """
         Call this at the end of a trajectory, or when one gets cut off
@@ -107,7 +105,6 @@ class PPOBufferX:
                 self.ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(rews, self.gamma)[:-1].astype(np.float32)).to(device)
                 
                 self.path_start_idx[done_env_idx] = self.ptr[done_env_idx]
-        
 
     def get(self):
         """
@@ -135,14 +132,15 @@ class PPOBufferX:
         return {k: v for k,v in data.items()}
 
 
-def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
-        env_num=100, max_ep_len=1000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
-        vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, 
-        target_kl=0.01, logger_kwargs=dict(), save_freq=10, model_save=False):
-    """
-    Proximal Policy Optimization (by clipping), 
 
-    with early stopping based on approximate KL
+def a2c(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
+        env_num=100, max_ep_len=1000, epochs=50, gamma=0.99, pi_lr=3e-4,
+        vf_lr=1e-3, train_v_iters=80, delay=2, lam=0.97,
+        logger_kwargs=dict(), save_freq=10, model_save=False):
+    """
+    Asynchronous Actor-critic (A2C)
+
+    (with GAE-Lambda for advantage estimation)
 
     Args:
         env_fn : A function which creates a copy of the environment.
@@ -194,9 +192,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                                            | make sure to flatten this!)
             ===========  ================  ======================================
 
-
         ac_kwargs (dict): Any kwargs appropriate for the ActorCritic object 
-            you provided to PPO.
+            you provided to A2C.
 
         seed (int): Seed for random number generators.
 
@@ -207,20 +204,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         gamma (float): Discount factor. (Always between 0 and 1.)
 
-        clip_ratio (float): Hyperparameter for clipping in the policy objective.
-            Roughly: how far can the new policy go from the old policy while 
-            still profiting (improving the objective function)? The new policy 
-            can still go farther than the clip_ratio says, but it doesn't help
-            on the objective anymore. (Usually small, 0.1 to 0.3.) Typically
-            denoted by :math:`\epsilon`. 
-
         pi_lr (float): Learning rate for policy optimizer.
 
         vf_lr (float): Learning rate for value function optimizer.
-
-        train_pi_iters (int): Maximum number of gradient descent steps to take 
-            on policy loss per epoch. (Early stopping may cause optimizer
-            to take fewer than this.)
 
         train_v_iters (int): Number of gradient descent steps to take on 
             value function per epoch.
@@ -230,18 +216,13 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         max_ep_len (int): Maximum length of trajectory / episode / rollout.
 
-        target_kl (float): Roughly what KL divergence we think is appropriate
-            between new and old policies after an update. This will get used 
-            for early stopping. (Usually small, 0.01 or 0.05.)
-
         logger_kwargs (dict): Keyword args for EpochLogger.
 
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
-        
-        atari (str): name of atari game (None if running continuous game).
+
     """
-    
+
     # Special function to avoid certain slowdowns from PyTorch + MPI combo.
     setup_pytorch_for_mpi()
 
@@ -250,6 +231,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     logger.save_config(locals())
 
     # Random seed
+    #! TODO: sync the random seed with the environment 
     seed += 10000 * proc_id()
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -271,26 +253,23 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up experience buffer
     local_steps_per_epoch = int(max_ep_len * env_num / num_procs())
-    buf = PPOBufferX(env_num, max_ep_len, obs_dim, act_dim, gamma, lam)
-    
+    buf = A2CBufferX(env_num, max_ep_len, obs_dim, act_dim, gamma, lam)
+
     #! TODO: make sure max_ep_len of buffer is the same with the max_ep_len setting from environment, error if not
 
-    # Set up function for computing PPO policy loss
+
+    # Set up function for computing A2C policy loss
     def compute_loss_pi(data):
         obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
 
         # Policy loss
         pi, logp = ac.pi(obs, act)
-        ratio = torch.exp(logp - logp_old)
-        clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
-        loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
+        loss_pi = -(logp * adv).mean()
 
         # Useful extra info
         approx_kl = (logp_old - logp).mean().item()
         ent = pi.entropy().mean().item()
-        clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
-        clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
-        pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
+        pi_info = dict(kl=approx_kl, ent=ent)
 
         return loss_pi, pi_info
 
@@ -310,23 +289,18 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def update():
         data = buf.get()
 
+        # Get loss and info values before update
         pi_l_old, pi_info_old = compute_loss_pi(data)
         pi_l_old = pi_l_old.item()
         v_l_old = compute_loss_v(data).item()
 
-        # Train policy with multiple steps of gradient descent
-        for i in range(train_pi_iters):
-            pi_optimizer.zero_grad()
-            loss_pi, pi_info = compute_loss_pi(data)
-            kl = mpi_avg(pi_info['kl'])
-            if kl > target_kl:
-                logger.log('Early stopping at step %d due to reaching max kl.'%i)
-                break
-            loss_pi.backward()
-            mpi_avg_grads(ac.pi)    # average grads across MPI processes
-            pi_optimizer.step()
-
-        logger.store(StopIter=i)
+        # Train policy with a single step of gradient descent
+        # for i in range(max(1, train_v_iters // delay)):
+        pi_optimizer.zero_grad()
+        loss_pi, pi_info = compute_loss_pi(data)
+        loss_pi.backward()
+        mpi_avg_grads(ac.pi)    # average grads across MPI processes
+        pi_optimizer.step()
 
         # Value function learning
         for i in range(train_v_iters):
@@ -337,15 +311,15 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             vf_optimizer.step()
 
         # Log changes from update
-        kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
+        kl, ent = pi_info['kl'], pi_info_old['ent']
         logger.store(LossPi=pi_l_old, LossV=v_l_old,
-                     KL=kl, Entropy=ent, ClipFrac=cf,
+                     KL=kl, Entropy=ent,
                      DeltaLossPi=(loss_pi.item() - pi_l_old),
                      DeltaLossV=(loss_v.item() - v_l_old))
 
     # Prepare for interaction with environment
     start_time = time.time()
-    
+
     # reset environment
     o = env.reset()
     # return, length, cost of env_num batch episodes
@@ -356,13 +330,16 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for t in range(max_ep_len):
+
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
             next_o, r, d, info = env.step(a)
             assert 'cost' in info.keys()
             
+            # Track cumulative cost over training
             cum_cost += info['cost'].cpu().numpy().squeeze().sum()
-                
+
+            # update return, length, cost of env_num batch episodes
             ep_ret += r.cpu().numpy().squeeze()
             ep_len += 1
             assert ep_cost.shape == info['cost'].cpu().numpy().squeeze().shape
@@ -405,10 +382,10 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
 
         # Save model
-        if ((epoch % save_freq == 0) or (epoch == epochs-1)) and model_save:
+        if (epoch % save_freq == 0) or (epoch == epochs-1) and model_save:
             logger.save_state({'env': env}, None)
 
-        # Perform PPO update!
+        # Perform A2C update!
         update()
         
         #=====================================================================#
@@ -416,6 +393,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         #=====================================================================#
         cumulative_cost = mpi_sum(cum_cost)
         cost_rate = cumulative_cost / ((epoch+1)*local_steps_per_epoch)
+
 
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
@@ -432,11 +410,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('DeltaLossV', average_only=True)
         logger.log_tabular('Entropy', average_only=True)
         logger.log_tabular('KL', average_only=True)
-        logger.log_tabular('ClipFrac', average_only=True)
-        logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
-        
+
 def create_env(args):
     # env =  safe_rl_envs_Engine(configuration(args.task))
     #! TODO: make engine configurable
@@ -444,9 +420,10 @@ def create_env(args):
     env = safe_rl_envs_Engine(config)
     return env
 
+
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser()    
+    parser = argparse.ArgumentParser()
     parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
     parser.add_argument('--hid', type=int, default=64)
     parser.add_argument('--l', type=int, default=2)
@@ -456,22 +433,22 @@ if __name__ == '__main__':
     parser.add_argument('--env_num', type=int, default=400)
     parser.add_argument('--max_ep_len', type=int, default=1000)
     parser.add_argument('--epochs', type=int, default=10)
-    parser.add_argument('--exp_name', type=str, default='ppo')
+    parser.add_argument('--exp_name', type=str, default='a2c')
     parser.add_argument('--model_save', action='store_true')
-    parser.add_argument('--target_kl', type=float, default=0.02)
+    parser.add_argument('--delay', type=int, default=2)
+    parser.add_argument('--train_v_iters', type=int, default=1000)
     args = parser.parse_args()
 
     mpi_fork(args.cpu)  # run parallel code with mpi
-    
 
-    exp_name = args.task + '_' + args.exp_name + '_' + 'kl' + str(args.target_kl) \
+    exp_name = args.task + '_' + args.exp_name  \
                         + '_' + 'epochs' + str(args.epochs) + '_' \
                         + 'step' + str(args.max_ep_len * args.env_num)
     logger_kwargs = setup_logger_kwargs(exp_name, args.seed)
-    
+
     # whether to save model
     model_save = True if args.model_save else False
-    ppo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
+    a2c(lambda : create_env(args), actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
         seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
-        logger_kwargs=logger_kwargs, model_save=model_save, target_kl=args.target_kl)
+        logger_kwargs=logger_kwargs, model_save=model_save)
