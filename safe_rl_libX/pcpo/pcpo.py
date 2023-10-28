@@ -6,26 +6,24 @@ from torch.optim import Adam
 import gym
 import time
 import copy
-import cpo_core as core
-from safe_rl_lib.utils.logx import EpochLogger, setup_logger_kwargs, colorize
-from safe_rl_lib.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
-from safe_rl_lib.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
-from safe_rl_envs.envs.engine import Engine as  safe_rl_envs_Engine
-from safe_rl_lib.utils.safe_rl_env_config import configuration
+import pcpo_core as core
+from utils.logx import EpochLogger, setup_logger_kwargs, colorize
+from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
+from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
+from  safe_rl_envs.envs.engine import Engine as  safe_rl_envs_Engine
+from utils.safe_rl_env_config import configuration
 import os.path as osp
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 EPS = 1e-8
 
-class CPOBuffer:
+class PCPOBuffer:
     """
-    A buffer for storing trajectories experienced by a CPO agent interacting
+    A buffer for storing trajectories experienced by a PCPO agent interacting
     with the environment, and using Generalized Advantage Estimation (GAE-Lambda)
     for calculating the advantages of state-action pairs.
-    
-    Important notice! This bufferX assumes only one batch of episodes is collected per epoch.
     """
-    
+
     def __init__(self, env_num, max_ep_len, obs_dim, act_dim, gamma=0.99, lam=0.95):
         self.obs_buf = torch.zeros(core.combined_shape(env_num, (max_ep_len, obs_dim[0])), dtype=torch.float32).to(device)
         self.act_buf = torch.zeros(core.combined_shape(env_num, (max_ep_len, act_dim[0])), dtype=torch.float32).to(device)
@@ -164,7 +162,6 @@ class CPOBuffer:
         )
         return {k: v for k,v in data.items()}
 
-
 def get_net_param_np_vec(net):
     """
         Get the parameters of the network as numpy vector
@@ -214,13 +211,13 @@ def auto_hession_x(objective, net, x):
     
     return auto_grad(torch.dot(jacob, x), net, to_numpy=True)
 
-def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
+def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         env_num=100, max_ep_len=1000, epochs=50, gamma=0.99, 
         vf_lr=1e-3, vcf_lr=1e-3, train_v_iters=80, train_vc_iters=80, lam=0.97, 
-        target_kl=0.01, target_cost = 1.5, logger_kwargs=dict(), save_freq=10, backtrack_coeff=0.8, 
-        backtrack_iters=100, model_save=False, cost_reduction=0):
+        target_kl=0.01, target_cost = 1.5, logger_kwargs=dict(), save_freq=10, kl_proj=True,
+        model_save=False, cost_reduction=0):
     """
-    Constrained Policy Optimization, 
+    Projection-Based Constrained Policy Optimization, 
  
     Args:
         env_fn : A function which creates a copy of the environment.
@@ -274,7 +271,7 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
 
         ac_kwargs (dict): Any kwargs appropriate for the ActorCritic object 
-            you provided to CPO.
+            you provided to PCPO.
 
         seed (int): Seed for random number generators.
 
@@ -305,15 +302,13 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             for early stopping. (Usually small, 0.01 or 0.05.)
             
         target_cost (float): Cost limit that the agent should satisfy
+        
+        kl_proj (bool): Whether to use the KL divergence projection 
 
         logger_kwargs (dict): Keyword args for EpochLogger.
 
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
-            
-        backtrack_coeff (float): Scaling factor for line search.
-        
-        backtrack_iters (int): Number of line search steps.
         
         model_save (bool): If saving model.
 
@@ -348,10 +343,10 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up experience buffer
     local_steps_per_epoch = int(max_ep_len * env_num / num_procs())
-    buf = CPOBuffer(env_num, max_ep_len, obs_dim, act_dim, gamma, lam)
+    buf = PCPOBuffer(env_num, max_ep_len, obs_dim, act_dim, gamma, lam)
 
     #! TODO: make sure max_ep_len of buffer is the same with the max_ep_len setting from environment, error if not
-    
+   
     def compute_kl_pi(data, cur_pi):
         """
         Return the sample average KL divergence between old and new policies
@@ -381,14 +376,14 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         
     def compute_loss_pi(data, cur_pi):
         """
-        The reward objective for CPO (CPO policy loss)
+        The reward objective for PCPO (PCPO policy loss)
         """
         obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
         
         # Policy loss 
         pi, logp = cur_pi(obs, act)
         ratio = torch.exp(logp - logp_old)
-        loss_pi = -(ratio * adv).mean()
+        loss_pi = (ratio * adv).mean() # the gradient of PCPO requires is for (maximize J) instead of (minimize -J)
         
         # Useful extra info
         approx_kl = (logp_old - logp).mean().item()
@@ -426,7 +421,7 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         v_l_old = compute_loss_v(data).item()
 
 
-        # CPO policy update core impelmentation 
+        # PCPO policy update core impelmentation 
         loss_pi, pi_info = compute_loss_pi(data, ac.pi)
         surr_cost = compute_cost_pi(data, ac.pi)
         
@@ -448,11 +443,13 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         rescale  = EpLen
         c /= (rescale + EPS)
         
-        # core calculation for CPO
+        # core calculation for PCPO
         Hinv_g   = cg(Hx, g)             # Hinv_g = H \ g        
         approx_g = Hx(Hinv_g)           # g
         # q        = np.clip(Hinv_g.T @ approx_g, 0.0, None)  # g.T / H @ g
         q        = Hinv_g.T @ approx_g
+        Linv_b = cg(Hx, b) if kl_proj else b
+        approx_b = Hx(Linv_b) if kl_proj else b # b
         
         # solve QP
         # decide optimization cases (feas/infeas, recovery)
@@ -462,65 +459,22 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             Hinv_b, r, s, A, B = 0, 0, 0, 0, 0
             optim_case = 4
         else:
-            # cost grad is nonzero: CPO update!
+            # cost grad is nonzero: PCPO update!
             Hinv_b = cg(Hx, b)                # H^{-1} b
             r = Hinv_b.T @ approx_g          # b^T H^{-1} g
             s = Hinv_b.T @ Hx(Hinv_b)        # b^T H^{-1} b
             A = q - r**2 / s            # should be always positive (Cauchy-Shwarz)
             B = 2*target_kl - c**2 / s  # does safety boundary intersect trust region? (positive = yes)
-
-            # c < 0: feasible
-
-            if c < 0 and B < 0:
-                # point in trust region is feasible and safety boundary doesn't intersect
-                # ==> entire trust region is feasible
-                optim_case = 3
-            elif c < 0 and B >= 0:
-                # x = 0 is feasible and safety boundary intersects
-                # ==> most of trust region is feasible
-                optim_case = 2
-            elif c >= 0 and B >= 0:
-                # x = 0 is infeasible and safety boundary intersects
-                # ==> part of trust region is feasible, recovery possible
-                optim_case = 1
-                print(colorize(f'Alert! Attempting feasible recovery!', 'yellow', bold=True))
-            else:
-                # x = 0 infeasible, and safety halfspace is outside trust region
-                # ==> whole trust region is infeasible, try to fail gracefully
-                optim_case = 0
-                print(colorize(f'Alert! Attempting INFEASIBLE recovery!', 'red', bold=True))
-        
-        print(colorize(f'optim_case: {optim_case}', 'magenta', bold=True))
-        
-        
+    
         # get optimal theta-theta_k direction
-        if optim_case in [3,4]:
-            lam = np.sqrt(q / (2*target_kl))
-            nu = 0
-        elif optim_case in [1,2]:
-            LA, LB = [0, r /c], [r/c, np.inf]
-            LA, LB = (LA, LB) if c < 0 else (LB, LA)
-            proj = lambda x, L : max(L[0], min(L[1], x))
-            lam_a = proj(np.sqrt(A/B), LA)
-            lam_b = proj(np.sqrt(q/(2*target_kl)), LB)
-            f_a = lambda lam : -0.5 * (A / (lam+EPS) + B * lam) - r*c/(s+EPS)
-            f_b = lambda lam : -0.5 * (q / (lam+EPS) + 2 * target_kl * lam)
-            lam = lam_a if f_a(lam_a) >= f_b(lam_b) else lam_b
-            # nu = max(0, lam * c - r) / (np.clip(s,0.,None)+EPS)
-            nu = max(0, lam * c - r) / (s+EPS)
-        else:
-            lam = 0
-            # nu = np.sqrt(2 * target_kl / (np.clip(s,0.,None)+EPS))
-            nu = np.sqrt(2 * target_kl / (s+EPS))
-            
-        # normal step if optim_case > 0, but for optim_case =0,
-        # perform infeasible recovery: step to purely decrease cost
-        x_direction = (1./(lam+EPS)) * (Hinv_g + nu * Hinv_b) if optim_case > 0 else nu * Hinv_b
+        trpo_step = np.sqrt((2*target_kl)/q)
+        cpo_step = max(0, (trpo_step * b.T @ Hinv_g + c)/(Linv_b.T @ approx_b))
+        x_direction = trpo_step * (Hinv_g) - cpo_step * Linv_b
         
         # copy an actor to conduct line search 
         actor_tmp = copy.deepcopy(ac.pi)
         def set_and_eval(step):
-            new_param = get_net_param_np_vec(ac.pi) - step * x_direction
+            new_param = get_net_param_np_vec(ac.pi) + step * x_direction
             assign_net_param_from_flat(new_param, actor_tmp)
             kl = compute_kl_pi(data, actor_tmp)
             pi_l, _ = compute_loss_pi(data, actor_tmp)
@@ -528,30 +482,15 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             
             return kl, pi_l, surr_cost
         
-        # update the policy such that the KL diveragence constraints are satisfied and loss is decreasing
-        for j in range(backtrack_iters):
-            try:
-                kl, pi_l_new, surr_cost_new = set_and_eval(backtrack_coeff**j)
-            except:
-                import ipdb; ipdb.set_trace()
-            
-            if (kl.item() <= target_kl and
-                (pi_l_new.item() <= pi_l_old if optim_case > 1 else True) and # if current policy is feasible (optim>1), must preserve pi loss
-                # surr_cost_new - surr_cost_old <= max(-c,0)):
-                surr_cost_new - surr_cost_old <= max(-c,-cost_reduction)):
-                
-                print(colorize(f'Accepting new params at step %d of line search.'%j, 'green', bold=False))
-                
-                # update the policy parameter 
-                new_param = get_net_param_np_vec(ac.pi) - backtrack_coeff**j * x_direction
-                assign_net_param_from_flat(new_param, ac.pi)
-                
-                loss_pi, pi_info = compute_loss_pi(data, ac.pi) # re-evaluate the pi_info for the new policy
-                surr_cost = compute_cost_pi(data, ac.pi) # re-evaluate the surr_cost for the new policy
-                break
-            if j==backtrack_iters-1:
-                print(colorize(f'Line search failed! Keeping old params.', 'yellow', bold=False))
-
+        kl, pi_l_new, surr_cost_new = set_and_eval(1)
+        # update the policy parameter 
+        new_param = get_net_param_np_vec(ac.pi) + 1 * x_direction
+        assign_net_param_from_flat(new_param, ac.pi)
+        
+        loss_pi, pi_info = compute_loss_pi(data, ac.pi) # re-evaluate the pi_info for the new policy
+        surr_cost = compute_cost_pi(data, ac.pi) # re-evaluate the surr_cost for the new policy
+        
+        
         # Value function learning
         for i in range(train_v_iters):
             vf_optimizer.zero_grad()
@@ -582,7 +521,7 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     o = env.reset()
     ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
     cum_cost = 0 
-    
+
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for t in range(max_ep_len):
@@ -590,7 +529,7 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
             next_o, r, d, info = env.step(a)
             assert 'cost' in info.keys()
-   
+              
             # Track cumulative cost over training
             cum_cost += info['cost'].cpu().numpy().squeeze().sum()
             ep_ret += r.cpu().numpy().squeeze()
@@ -599,14 +538,14 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             
             assert ep_cost.shape == info['cost'].cpu().numpy().squeeze().shape
             ep_cost += info['cost'].cpu().numpy().squeeze().sum()
-            
+
             # save and log
             buf.store(o, a, r, v, logp, info['cost'], vc, mu, logstd)
             logger.store(VVals=v.cpu().numpy())
             
             # Update obs (critical!)
             o = next_o
-                        
+
             timeout = (t + 1) == max_ep_len
             terminal = d.cpu().numpy().any() > 0 or timeout
 
@@ -646,7 +585,7 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if ((epoch % save_freq == 0) or (epoch == epochs-1)) and model_save:
             logger.save_state({'env': env}, None)
 
-        # Perform CPO update!
+        # Perform PCPO update!
         update()
         
         #=====================================================================#
@@ -687,7 +626,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()    
     parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
     parser.add_argument('--target_cost', type=float, default=0.) # the cost limit for the environment
-    parser.add_argument('--target_kl', type=float, default=0.02) # the kl divergence limit for CPO
+    parser.add_argument('--target_kl', type=float, default=0.02) # the kl divergence limit for PCPO
     parser.add_argument('--cost_reduction', type=float, default=0.) # the cost_reduction limit when current policy is infeasible
     parser.add_argument('--hid', type=int, default=64)
     parser.add_argument('--l', type=int, default=2)
@@ -697,23 +636,28 @@ if __name__ == '__main__':
     parser.add_argument('--env_num', type=int, default=400)
     parser.add_argument('--max_ep_len', type=int, default=1000)
     parser.add_argument('--epochs', type=int, default=10)
-    parser.add_argument('--exp_name', type=str, default='cpo')
+    parser.add_argument('--exp_name', type=str, default='pcpo')
     parser.add_argument('--model_save', action='store_true')
+    parser.add_argument('--l2_proj', action='store_true')
     args = parser.parse_args()
 
     mpi_fork(args.cpu)  # run parallel code with mpi
     
+    kl_proj = False if args.l2_proj else True
+    
     exp_name = args.task + '_' + args.exp_name \
                 + '_' + 'kl' + str(args.target_kl) \
                 + '_' + 'target_cost' + str(args.target_cost) \
+                + '_' + 'kl_proj' + str(kl_proj) \
                 + '_' + 'epochs' + str(args.epochs) \
                 + '_' + 'step' + str(args.max_ep_len * args.env_num)
+                
     logger_kwargs = setup_logger_kwargs(exp_name, args.seed)
 
     # whether to save model
     model_save = True if args.model_save else False
-    cpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
+    pcpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
         seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
         logger_kwargs=logger_kwargs, target_cost=args.target_cost, 
-        model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction)
+        model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction, kl_proj=kl_proj)
