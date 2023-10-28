@@ -17,7 +17,7 @@ import os.path as osp
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 EPS = 1e-8
 
-class PdoBuffer:
+class PdoBufferX:
     """
     A buffer for storing trajectories experienced by a PDO agent interacting
     with the environment, and using Generalized Advantage Estimation (GAE-Lambda)
@@ -351,7 +351,7 @@ def pdo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up experience buffer
     local_steps_per_epoch = int(max_ep_len * env_num / num_procs())
-    buf = PdoBuffer(env_num, max_ep_len, obs_dim, act_dim, gamma, lam)
+    buf = PdoBufferX(env_num, max_ep_len, obs_dim, act_dim, gamma, lam)
     
     def compute_kl_pi(data, cur_pi):
         """

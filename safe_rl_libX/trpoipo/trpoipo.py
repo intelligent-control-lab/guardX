@@ -17,7 +17,7 @@ import os.path as osp
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 EPS = 1e-8
 
-class TRPOIPOBuffer:
+class TRPOIPOBufferX:
     """
     A buffer for storing trajectories experienced by a PPO agent interacting
     with the environment, and using Generalized Advantage Estimation (GAE-Lambda)
@@ -343,7 +343,7 @@ def trpoipo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up experience buffer
     local_steps_per_epoch = int(max_ep_len * env_num / num_procs())
-    buf = TRPOIPOBuffer(env_num, max_ep_len, obs_dim, act_dim, gamma, lam)
+    buf = TRPOIPOBufferX(env_num, max_ep_len, obs_dim, act_dim, gamma, lam)
 
 
     def compute_kl_pi(data, cur_pi):
