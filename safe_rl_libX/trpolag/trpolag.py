@@ -121,7 +121,7 @@ class TRPOLAGBufferX:
                 cost_deltas = costs[:-1] + self.gamma * cost_vals[1:] - cost_vals[:-1]
                 
                 self.adv_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(deltas, self.gamma * self.lam).astype(np.float32)).to(device)
-                self.cost_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(cost_deltas, self.gamma * self.lam).astype(np.float32)).to(device)
+                self.adc_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(cost_deltas, self.gamma * self.lam).astype(np.float32)).to(device)
                 
                 # the next line computes rewards-to-go, to be targets for the value function
                 self.ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(rews, self.gamma)[:-1].astype(np.float32)).to(device)
