@@ -10,47 +10,7 @@ def configuration_list(task):
             should be used for video visualization. For example: 'Goal_Point_8Hazards_noconti' for training
             and 'Goal_Point_8Hazards' for video visulization.
     """
-    ################ Goal Tasks #################  
-    
-    if task == "Goal_Point_8Hazards_nosensor":
-        config = {
-            # robot setting
-            'robot_base': 'xmls/point.xml',  
-
-            # task setting
-            'task': 'goal',
-            'goal_size': 0.5,
-
-            # observation setting
-            'observe_goal_comp': True,  # Observe the goal with a lidar sensor
-            'observe_hazards': True,  # Observe the vector from agent to hazards
-            
-            # constraint setting
-            'constrain_hazards': True,  # Constrain robot from being in hazardous areas
-            'constrain_indicator': False,  # If true, all costs are either 1 or 0 for a given step. If false, then we get dense cost.
-
-            # lidar setting
-            'lidar_num_bins': 16,
-            
-            # object setting
-            'hazards_num': 8,
-            'hazards_size': 0.3,
-            
-            # sensor 
-            'sensors_obs': [],
-            'sensors_hinge_joints': False,
-            'sensors_ball_joints': False,
-            'sensors_angle_components': False,
-            'observation_flatten': True,
-            'observe_sensors': False,
-            'observe_qpos': True,
-            'observe_qvel': True,
-            'observe_ctrl': True
-        }
-
-
-    
-          
+    ################ Goal Tasks #################        
     if task == "Goal_Point_8Hazards":
         config = {
             # robot setting
