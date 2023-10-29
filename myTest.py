@@ -1,5 +1,6 @@
 import jax
 import os
+from mpi4py import MPI
 from jax import numpy as jp
 # jax.config.update("jax_default_device", jax.devices()[6])
 # os.environ["CUDA_VISIBLE_DEVICES"] = "6"
@@ -19,21 +20,23 @@ import mediapy as media
 
 config = {
             'num_envs':10,
-            'device_id':7
+            'device_id':0
         }
-# env = Engine(config)
-# obs = env.reset()
+env = Engine(config)
+obs = env.reset()
 
 t = time.time()
 print("start")
 images = []
-for i in range(600):
+for i in range(100):
 # while 1:
 # test feihan push
-    act = np.random.uniform(-1,1,(env.action_space.shape))
+    act = np.random.uniform(-1,1,(10,2))
     # act = 2 * (torch.rand(env.action_space.shape) - 0.5)
-    act = torch.from_numpy(act)
+    act = torch.from_numpy(act).to("cuda:0")
+    print(act.shape, act.device)
     obs, reward, done, info = env.step(act)
+    print(obs.shape, obs.device)
     # images.append(env.render())
 print("finish ", time.time() - t)
 print(obs.shape)

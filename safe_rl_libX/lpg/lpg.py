@@ -1,3 +1,6 @@
+# Must import this before torch, otherwise jaxlib will get error: "DLPack tensor is on GPU, but no GPU backend was provided"
+from jax import numpy as jp
+
 import os
 os.sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), '..'))
 import numpy as np

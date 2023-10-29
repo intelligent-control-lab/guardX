@@ -1,3 +1,6 @@
+# Must import this before torch, otherwise jaxlib will get error: "DLPack tensor is on GPU, but no GPU backend was provided"
+from jax import numpy as jp
+
 import os
 os.sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), '..'))
 import numpy as np
@@ -11,7 +14,7 @@ import usl_core as core
 from utils.logx import EpochLogger, setup_logger_kwargs, colorize
 from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
-from  safe_rl_envs.envs.engine import Engine as  safe_rl_envs_Engine
+from safe_rl_envs.envs.engine import Engine as  safe_rl_envs_Engine
 from utils.safe_rl_env_config import configuration
 import os.path as osp
 

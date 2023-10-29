@@ -1,3 +1,6 @@
+# Must import this before torch, otherwise jaxlib will get error: "DLPack tensor is on GPU, but no GPU backend was provided"
+from jax import numpy as jp
+
 import os
 os.sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), '..'))
 import numpy as np
@@ -7,11 +10,11 @@ import gym
 import time
 import copy
 import trpo_core as core
-from safe_rl_lib.utils.logx import EpochLogger, setup_logger_kwargs, colorize
-from safe_rl_lib.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
-from safe_rl_lib.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
+from utils.logx import EpochLogger, setup_logger_kwargs, colorize
+from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
+from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
 from safe_rl_envs.envs.engine import Engine as  safe_rl_envs_Engine
-from safe_rl_lib.utils.safe_rl_env_config import configuration
+from utils.safe_rl_env_config import configuration
 import os.path as osp
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -310,6 +313,7 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Instantiate environment
     env = env_fn()
+    
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
 
@@ -547,7 +551,7 @@ def create_env(args):
     env = safe_rl_envs_Engine(config)
     return env
 
-if __name__ == '__main__':
+if __name__ == '__main__':    
     import argparse
     parser = argparse.ArgumentParser()    
     parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
