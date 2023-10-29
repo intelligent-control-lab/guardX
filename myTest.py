@@ -1,3 +1,14 @@
+import jax
+import os
+from jax import numpy as jp
+# jax.config.update("jax_default_device", jax.devices()[6])
+# os.environ["CUDA_VISIBLE_DEVICES"] = "6"
+# os.environ['XLA_PYTHON_CLIENT_PREALLOCATE']='false'
+# os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='.10'
+# ja = jp.ones(1)
+# key = jax.random.PRNGKey(0)
+# import ipdb;ipdb.set_trace()
+
 from safe_rl_envs.envs.engine import Engine
 from safe_rl_envs.envs.mjx_device import device_put
 import numpy as np
@@ -5,9 +16,13 @@ import numpy as np
 import torch
 import time
 import mediapy as media
-config = {'num_envs':2048}
-env = Engine(config)
-obs = env.reset()
+
+config = {
+            'num_envs':10,
+            'device_id':7
+        }
+# env = Engine(config)
+# obs = env.reset()
 
 t = time.time()
 print("start")
