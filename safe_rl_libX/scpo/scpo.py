@@ -630,7 +630,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     
     M = torch.zeros(env_num, 1, dtype=torch.float32).to(device) # initialize the current maximum cost
     o_aug = torch.cat((o, M), axis=1) # augmented observation = observation + M 
-    first_step = np.ones(env_num, dtype=np.bool) # flag for the first step of each episode
+    first_step = np.ones(env_num) # flag for the first step of each episode
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
@@ -652,11 +652,11 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # Track cumulative cost over training
             cum_cost += info['cost'].cpu().numpy().squeeze().sum()
             ep_ret += r.cpu().numpy().squeeze()
-            ep_cost_ret += info['cost'].cpu().numpy().squeeze().sum() * (gamma ** t)
+            ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t)
             ep_len += 1
             
             assert ep_cost.shape == info['cost'].cpu().numpy().squeeze().shape
-            ep_cost += info['cost'].cpu().numpy().squeeze().sum()
+            ep_cost += info['cost'].cpu().numpy().squeeze()
 
             # save and log
             buf.store(o_aug, a, r, v, logp, cost_increase, vc, mu, logstd)
@@ -665,28 +665,29 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # Update obs (critical!)
             # o = next_o
             M = M_next
-            o_aug = torch.cat((next_o, M_next), axis=1)
+            o_aug = torch.cat((next_o, M_next.view(-1,1)), axis=1)
             
             timeout = (t + 1) == max_ep_len
             terminal = d.cpu().numpy().any() > 0 or timeout
 
             if terminal:
                 # if trajectory didn't reach terminal state, bootstrap value target
-                _, v, vc, _, _, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
+                _, v, vc, _, _, _ = ac.step(o_aug)
                 if timeout:
                     done = np.ones(env_num) # every environment needs to finish path
                     # logger.store(EpRet=ep_ret, EpLen=ep_len, EpCost=ep_cost)
                     logger.store(EpRet=ep_ret[np.where(ep_len == max_ep_len)],
                                  EpLen=ep_len[np.where(ep_len == max_ep_len)],
                                  EpCostRet=ep_cost_ret[np.where(ep_len == max_ep_len)],
-                                 EpCost=ep_cost[np.where(ep_len == max_ep_len)])
+                                 EpCost=ep_cost[np.where(ep_len == max_ep_len)],
+                                 EpMaxCost=M.cpu().numpy()[np.where(ep_len == max_ep_len)])
                     buf.finish_path(v, vc, done)
                     # reset environment 
                     o = env.reset()
                     ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
                     M = torch.zeros(env_num, 1, dtype=torch.float32).to(device) # initialize the current maximum cost
-                    o_aug = torch.cat((o, M), axis=1) # augmented observation = observation + M 
-                    first_step = np.ones(env_num, dtype=np.bool)
+                    o_aug = torch.cat((o, M.view(-1,1)), axis=1) # augmented observation = observation + M 
+                    first_step = np.ones(env_num)
                 else:
                     # trajectory finished for some environment
                     done = d.cpu().numpy() # finish path for certain environments
@@ -696,18 +697,18 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     logger.store(EpRet=ep_ret[np.where(done == 1)], 
                                  EpLen=ep_len[np.where(done == 1)],
                                  EpCostRet=ep_cost_ret[np.where(done == 1)], 
-                                 EpCost=ep_cost[np.where(done == 1)])
+                                 EpCost=ep_cost[np.where(done == 1)],
+                                 EpMaxCost=M.cpu().numpy()[np.where(done == 1)])
                     ep_ret[np.where(done == 1)], ep_len[np.where(done == 1)], ep_cost[np.where(done == 1)], ep_cost_ret[np.where(done == 1)]\
                         =   np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0])
-                            
-                    # TODO: reset part of the envs and get corresponding o
-                    # o = env.reset(np.where(done == 1)[0])
-                    # M[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0]).to(device)
-                    # o_aug[np.where(done == 1)] = torch.cat((o, M[np.where(done == 1)]), axis=1)
-                    # first_step[np.where(done == 1)] = np.ones(np.where(done == 1)[0].shape[0], dtype=np.bool)
+                    
+                    o = info["obs_reset"][np.where(done==1)]
+                    M[np.where(done == 1)] = torch.zeros((len(np.where(done==1)))).to(device)
+                    o_aug[np.where(done == 1)] = torch.cat((o, M[np.where(done == 1)].view(-1,1)), axis=1)
+                    first_step[np.where(done == 1)] = np.ones((len(np.where(done==1))))
                     
                     buf.finish_path(v, vc, done)
 
@@ -728,7 +729,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', average_only=True)
         logger.log_tabular('EpLen', average_only=True)
-        logger.log_tabular('EpCostRet', average_only=True)
+        logger.log_tabular('EpCostRet', with_min_and_max=True)
         logger.log_tabular('EpCost', average_only=True)
         logger.log_tabular('EpMaxCost', average_only=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
