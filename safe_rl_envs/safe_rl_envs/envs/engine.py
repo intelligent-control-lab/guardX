@@ -228,6 +228,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         action = jax.tree_map(np.array, ctrl_range)
         self.action_space = gym.spaces.Box(action[:, 0], action[:, 1], dtype=np.float32)
         # self.action_space = utils.batch_space(action_space, self.num_envs)
+        self.done = None
         self.build_observation_space()
         self.body_name2id = {}
         self.body_name2id['floor'] = 0
@@ -329,7 +330,6 @@ class Engine(gym.Env, gym.utils.EzPickle):
         xpos = self.mjx_data.xpos
         xpos = xpos.at[3:].set(layout["hazards_pos"])
         xpos = xpos.at[2].set(layout["goal_pos"][0])
-        # data = data.replace(xpos=jp.zeros(self.mjx_model.nbody), qpos=jp.zeros(self.mjx_model.nq), qvel=jp.zeros(self.mjx_model.nv), ctrl=jp.zeros(self.mjx_model.nu))
         data = mjx.forward(self.mjx_model, data)
         last_data = data
         last_last_data = data
@@ -349,7 +349,6 @@ class Engine(gym.Env, gym.utils.EzPickle):
                  last_last_data: mjx.Data, 
                  action: jp.ndarray,
                  rng):
-        #! TODO: be able to send the last data and last last data and last dist goal 
         """Runs one timestep of the environment's dynamics."""
         def f(data, _):   
             data = data.replace(ctrl=action)
@@ -371,11 +370,14 @@ class Engine(gym.Env, gym.utils.EzPickle):
         ctrl = jp.where(done > 0.0, x = ctrl_reset, y = data.ctrl)
         qvel = jp.where(done > 0.0, x = qvel_reset, y = data.qvel)
         data = data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
+        data_reset, _ = jax.lax.scan(f, data, (), self.physics_steps_per_control_step)
+        obs_reset, obs_dict_reset = self.obs(data_reset, None, None)
+        info['obs_reset'] = jp.where(done > 0.0, x = obs_reset, y = obs)
         return obs, reward, done, info, data
 
     def reset(self):
         ''' Reset the physics simulation and return observation '''
-        obs, reward, done, info, self.data = self._reset(self.key)
+        obs, reward, self.done, info, self.data = self._reset(self.key)
         self.info = info
         return jax_to_torch(obs)
     
@@ -386,9 +388,9 @@ class Engine(gym.Env, gym.utils.EzPickle):
         
         self.key,_ = jax.random.split(self.key, 2)
         self.update_data()
-        obs, reward, done, info, self.data= self._step(self.data, self.last_data, self.last_last_data, action, self.key)
+        obs, reward, self.done, info, self.data= self._step(self.data, self.last_data, self.last_last_data, action, self.key)
         self.info = info
-        return jax_to_torch(obs), jax_to_torch(reward), jax_to_torch(done), jax_to_torch(info)
+        return jax_to_torch(obs), jax_to_torch(reward), jax_to_torch(self.done), jax_to_torch(info)
     
     def build_layout(self, rng):
         ''' Rejection sample a placement of objects to find a layout. '''
@@ -569,7 +571,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         robot_pos = data.xpos[self.body_name2id['robot'],:].reshape(-1,3)
         hazards_pos = data.xpos[self.body_name2id['hazards'],:].reshape(-1,3)
         dist_robot2hazard = jp.linalg.norm(hazards_pos[:,:2] - robot_pos[:,:2], axis=1)
-        dist_robot2hazard_below_threshold = jp.maximum(dist_robot2hazard, self.hazards_size)
+        dist_robot2hazard_below_threshold = jp.minimum(dist_robot2hazard, self.hazards_size)
         cost = jp.sum(self.hazards_size*jp.ones(dist_robot2hazard_below_threshold.shape) - dist_robot2hazard_below_threshold)
         return cost 
        
