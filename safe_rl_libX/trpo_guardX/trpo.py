@@ -7,11 +7,11 @@ import gym
 import time
 import copy
 import trpo_core as core
-from safe_rl_lib.utils.logx import EpochLogger, setup_logger_kwargs, colorize
-from safe_rl_lib.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
-from safe_rl_lib.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
+from utils.logx import EpochLogger, setup_logger_kwargs, colorize
+from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
+from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
 from safe_rl_envs.envs.engine import Engine as  safe_rl_envs_Engine
-from safe_rl_lib.utils.safe_rl_env_config import configuration
+from utils.safe_rl_env_config import configuration
 import os.path as osp
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -581,10 +581,10 @@ if __name__ == '__main__':
     model_save = True if args.model_save else False
     t = time.time()
     print("start")
-    trpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
-        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
-        seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
-        logger_kwargs=logger_kwargs, model_save=model_save, target_kl=args.target_kl)
+    # trpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
+    #     ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
+    #     seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
+    #     logger_kwargs=logger_kwargs, model_save=model_save, target_kl=args.target_kl)
     print("finish ", time.time() - t)
     
     import mediapy as media
@@ -599,6 +599,8 @@ if __name__ == '__main__':
     for i in range(600): 
         act, v, logp, _, _ = ac.step(obs)
         obs, reward, done, info = env.step(act)
+        if done > 0:
+            import ipdb;ipdb.set_trace()
         env.render()
         # images.append(env.render())
     
