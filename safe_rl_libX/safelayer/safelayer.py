@@ -393,7 +393,10 @@ def safelayer(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0
         target_c_positive = target_c[target_c > 0]
         current_c_positive = current_c[target_c > 0]
         
-        frac = len(target_c_positive) / len(target_c_zero) 
+        if len(target_c_zero) != 0:
+            frac = len(target_c_positive) / len(target_c_zero) 
+        else: 
+            frac = 1.0
             
         if frac < 1. :# Fraction of elements to keep
             indices = downsample_rand.choice(len(target_c_zero), size=int(len(target_c_zero)*frac), replace=False)
@@ -498,9 +501,9 @@ def safelayer(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0
     # reset environment
     o = env.reset()
     # return, length, cost of env_num batch episodes
-    ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num) 
+    ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
     # cum_cost is the cumulative cost over the training
-    cum_cost, prev_c = 0, np.zeros(env_num)
+    cum_cost, prev_c = 0, torch.zeros(env_num, dtype=torch.float32).to(device)
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
@@ -509,6 +512,7 @@ def safelayer(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0
             
             # apply safe layer to get corrected action
             warmup_ratio = 1.0/3.0
+            # warmup_ratio = 0.0
             if epoch > epochs * warmup_ratio:
                 a_safe = ac.ccritic.safety_correction(o, a, prev_c)
             else:
@@ -523,7 +527,9 @@ def safelayer(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0
             
             # update return, length, cost of env_num batch episodes
             ep_ret += r.cpu().numpy().squeeze()
+            ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t)
             ep_len += 1
+            
             assert ep_cost.shape == info['cost'].cpu().numpy().squeeze().shape
             ep_cost += info['cost'].cpu().numpy().squeeze()
 
@@ -546,21 +552,24 @@ def safelayer(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0
                     # logger.store(EpRet=ep_ret, EpLen=ep_len, EpCost=ep_cost)
                     logger.store(EpRet=ep_ret[np.where(ep_len == max_ep_len)],
                                  EpLen=ep_len[np.where(ep_len == max_ep_len)],
+                                 EpCostRet=ep_cost_ret[np.where(ep_len == max_ep_len)],
                                  EpCost=ep_cost[np.where(ep_len == max_ep_len)])
                     buf.finish_path(v, done)
                     # reset environment 
                     o = env.reset()
-                    ep_ret, ep_len, ep_cost, prev_c = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
+                    ep_ret, ep_len, ep_cost, prev_c, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), torch.zeros(env_num, dtype=torch.float32).to(device), np.zeros(env_num)
                 else:
                     # trajectory finished for some environment
                     done = d.cpu().numpy() # finish path for certain environments
                     v[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0]).to(device)
                     
-                    logger.store(EpRet=ep_ret[np.where(done == 1)], EpLen=ep_len[np.where(done == 1)], EpCost=ep_cost[np.where(done == 1)])
-                    ep_ret[np.where(done == 1)], ep_len[np.where(done == 1)], ep_cost[np.where(done == 1)], prev_c[np.where(done==1)]\
+                    logger.store(EpRet=ep_ret[np.where(done == 1)], EpLen=ep_len[np.where(done == 1)], 
+                                 EpCostRet=ep_cost_ret[np.where(done == 1)], EpCost=ep_cost[np.where(done == 1)])
+                    ep_ret[np.where(done == 1)], ep_len[np.where(done == 1)], ep_cost[np.where(done == 1)], prev_c[np.where(done==1)], ep_cost_ret[np.where(done == 1)]\
                         =   np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0]), \
+                            torch.zeros(np.where(done == 1)[0].shape[0], dtype=torch.float32).to(device), \
                             np.zeros(np.where(done == 1)[0].shape[0])
                     
                     buf.finish_path(v, done)
@@ -583,6 +592,7 @@ def safelayer(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpCost', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
+        logger.log_tabular('EpCostRet', with_min_and_max=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
         logger.log_tabular('CostRate', cost_rate)
         logger.log_tabular('VVals', with_min_and_max=True)

@@ -200,7 +200,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         
         
         self.dt = self.mj_model.opt.timestep * self.physics_steps_per_control_step
-        print(self.dt)
+        # print(self.dt)
         self.key = jax.random.PRNGKey(0) # Number of the batched environment
 
         # Use jax.vmap to warp single environment reset to batched reset function

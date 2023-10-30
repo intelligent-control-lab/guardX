@@ -123,7 +123,7 @@ class LpgBufferX:
                 
                 qcs = np.append(self.qc_buf[done_env_idx, path_slice].cpu().numpy(), 0)
                 costs = np.append(self.cost_buf[done_env_idx, path_slice].cpu().numpy(), 0)
-                self.targetc_buf[done_env_idx, path_slice] = costs[:-1] + self.gamma * qcs[1:]
+                self.targetc_buf[done_env_idx, path_slice] = torch.from_numpy((costs[:-1] + self.gamma * qcs[1:]).astype(np.float32)).to(device)
                 
                 self.path_start_idx[done_env_idx] = self.ptr[done_env_idx]
                 
@@ -475,7 +475,7 @@ def lpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # reset environment
     o = env.reset()
     # return, length, cost of env_num batch episodes
-    ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num) 
+    ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num) 
     # cum_cost is the cumulative cost over the training
     cum_cost, prev_c = 0, np.zeros(env_num)
 
@@ -485,7 +485,7 @@ def lpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             a, v, logp, mu, logstd, qc = ac.step(torch.as_tensor(o, dtype=torch.float32))
             if(t == 0):
                 ac.ccritic.store_init(o, a)
-                print("Initial D(x0): ", ac.ccritic.get_Q_init())
+                # print("Initial D(x0): ", ac.ccritic.get_Q_init())
             
             # apply safe layer to get corrected action
             warmup_ratio = 1.0/3.0
@@ -505,7 +505,9 @@ def lpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             
             # update return, length, cost of env_num batch episodes
             ep_ret += r.cpu().numpy().squeeze()
+            ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t)
             ep_len += 1
+            
             assert ep_cost.shape == info['cost'].cpu().numpy().squeeze().shape
             ep_cost += info['cost'].cpu().numpy().squeeze()
             
@@ -527,19 +529,22 @@ def lpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     # logger.store(EpRet=ep_ret, EpLen=ep_len, EpCost=ep_cost)
                     logger.store(EpRet=ep_ret[np.where(ep_len == max_ep_len)],
                                  EpLen=ep_len[np.where(ep_len == max_ep_len)],
+                                 EpCostRet=ep_cost_ret[np.where(ep_len == max_ep_len)],
                                  EpCost=ep_cost[np.where(ep_len == max_ep_len)])
                     buf.finish_path(v, done)
                     # reset environment 
                     o = env.reset()
-                    ep_ret, ep_len, ep_cost, prev_c = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
+                    ep_ret, ep_len, ep_cost, prev_c, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num), np.zeros(env_num)
                 else:
                     # trajectory finished for some environment
                     done = d.cpu().numpy() # finish path for certain environments
                     v[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0]).to(device)
                     
-                    logger.store(EpRet=ep_ret[np.where(done == 1)], EpLen=ep_len[np.where(done == 1)], EpCost=ep_cost[np.where(done == 1)])
-                    ep_ret[np.where(done == 1)], ep_len[np.where(done == 1)], ep_cost[np.where(done == 1)], prev_c[np.where(done==1)]\
+                    logger.store(EpRet=ep_ret[np.where(done == 1)], EpLen=ep_len[np.where(done == 1)], 
+                                 EpCostRet=ep_cost_ret[np.where(done == 1)], EpCost=ep_cost[np.where(done == 1)])
+                    ep_ret[np.where(done == 1)], ep_len[np.where(done == 1)], ep_cost[np.where(done == 1)], prev_c[np.where(done==1)], ep_cost_ret[np.where(done == 1)]\
                         =   np.zeros(np.where(done == 1)[0].shape[0]), \
+                            np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0])
@@ -563,6 +568,7 @@ def lpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpCost', with_min_and_max=True)
+        logger.log_tabular('EpCostRet', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
         logger.log_tabular('CostRate', cost_rate)

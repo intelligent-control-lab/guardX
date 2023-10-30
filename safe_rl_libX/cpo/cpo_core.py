@@ -56,6 +56,17 @@ def discount_cumsum(x, discount):
     """
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
+def batch_discount_cumsum(x, discount):
+    """the batch discounted cumulative sums of vectors, using magic from rllab
+
+    Args:
+        x (torch.tensor): vector x, shape = (B,length)
+        discount (float): the discount factor
+
+    Returns:
+        torch.tensor: the batch discounted cumulative sums of vectors, shape = (B,length)
+    """
+    return np.asarray([discount_cumsum(x_row, discount) for x_row in x.cpu().numpy()])
 
 class Actor(nn.Module):
 
@@ -163,7 +174,7 @@ class MLPActorCritic(nn.Module):
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
             vc = self.vc(obs)
-        return a.cpu().numpy(), v.cpu().numpy(), vc.cpu().numpy(), logp_a.cpu().numpy(), pi.mean.cpu().numpy(), torch.log(pi.stddev).cpu().numpy()
+        return a, v, vc, logp_a, pi.mean, torch.log(pi.stddev)
 
     def act(self, obs):
         return self.step(obs)[0]

@@ -57,6 +57,17 @@ def discount_cumsum(x, discount):
     """
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
+def batch_discount_cumsum(x, discount):
+    """the batch discounted cumulative sums of vectors, using magic from rllab
+
+    Args:
+        x (torch.tensor): vector x, shape = (B,length)
+        discount (float): the discount factor
+
+    Returns:
+        torch.tensor: the batch discounted cumulative sums of vectors, shape = (B,length)
+    """
+    return np.asarray([discount_cumsum(x_row, discount) for x_row in x.cpu().numpy()])
 
 class Actor(nn.Module):
 
@@ -156,27 +167,27 @@ class C_Critic(nn.Module):
     
     # Get the corrected action 
     def safety_correction(self, obs, act, prev_cost, delta=0.):
-        obs = torch.as_tensor(obs, dtype=torch.float32).to(self.device)
-        act = torch.as_tensor(act, dtype=torch.float32).to(self.device)
+        pred = self.forward(obs, act) + prev_cost
+        a_result = torch.zeros(act.shape).to(device=self.device)
         
-        pred = self.forward(obs, act).item() + prev_cost
-        if pred <= delta:
-            return act.detach().cpu().numpy()
-        else:
-            g = self.pred_g(obs)
+        a_result[torch.where(pred<=delta)] = act[torch.where(pred<=delta)]
+        if len(torch.where(pred>delta)) != 0:
+            index = torch.where(pred>delta)
+            g = self.pred_g(obs[index])
             # Equation (5) from Dalal 2018.
-            numer = self.forward(obs, act).item() + prev_cost - delta
-            if len(obs.shape) == 1:
-                assert len(obs.shape) == len(act.shape)
-                denomin = torch.dot(g,g) + 1e-8
+            numer = self.forward(obs[index], act[index]) + prev_cost[index] - delta
+            if obs[index].shape[0] == 1:
+                assert obs.shape[0] == act.shape[0]
+                denomin = torch.dot(g.squeeze(),g.squeeze()) + 1e-8
             else:
                 denomin = torch.bmm(g.unsqueeze(1),g.unsqueeze(2)).view(-1) + 1e-8
             mult = F.relu(numer / denomin)
-            a_old = act
-            a_new = a_old - mult * g
+            a_old = act[index]
+            a_new = a_old - torch.cat((mult.view(-1,1), mult.view(-1,1)), axis=1) * g
             a_new = torch.clamp(a_new, -self.max_action, self.max_action)
-            return a_new.detach().cpu().numpy()
-
+            a_result[index] = a_new
+        
+        return a_result.detach()
 
 class MLPActorCritic(nn.Module):
 
@@ -208,7 +219,7 @@ class MLPActorCritic(nn.Module):
             a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
-        return a.cpu().numpy(), v.cpu().numpy(), logp_a.cpu().numpy(), pi.mean.cpu().numpy(), torch.log(pi.stddev).cpu().numpy()
+        return a, v, logp_a, pi.mean, torch.log(pi.stddev)
 
     def act(self, obs):
         return self.step(obs)[0]

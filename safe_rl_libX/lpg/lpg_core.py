@@ -59,6 +59,17 @@ def discount_cumsum(x, discount):
     """
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
+def batch_discount_cumsum(x, discount):
+    """the batch discounted cumulative sums of vectors, using magic from rllab
+
+    Args:
+        x (torch.tensor): vector x, shape = (B,length)
+        discount (float): the discount factor
+
+    Returns:
+        torch.tensor: the batch discounted cumulative sums of vectors, shape = (B,length)
+    """
+    return np.asarray([discount_cumsum(x_row, discount) for x_row in x.cpu().numpy()])
 
 class Actor(nn.Module):
 
@@ -158,32 +169,33 @@ class C_Critic(nn.Module):
     
     # Get the corrected action 
     def safety_correction(self, obs, act, prev_cost, delta=0., Niter = 40, eta = 0.05):
-        obs = torch.as_tensor(obs, dtype=torch.float32).to(self.device)
-        act = torch.as_tensor(act, dtype=torch.float32).to(self.device)
         pred = self.forward(torch.cat((obs,act), axis=1))
         
         act_0 = torch.zeros_like(act)
         act_0.requires_grad_()
         self.c_net.zero_grad()
         pred_0 = self.forward(torch.cat((obs,act_0), axis=1))
-        pred_0.backward(retain_graph=True)
+        pred_0.mean().backward(retain_graph=True)
 
-        if pred.item() <= delta:
-            return act.detach().cpu().numpy()
-        else:
-            G = act_0.grad.cpu().data.numpy()
-            G = np.asarray(G, dtype=np.double)
-            act_np = act.detach().cpu().numpy()
+        act_result = torch.zeros(act.shape).to(device=self.device)
+        act_result[torch.where(pred<=delta)] = act[torch.where(pred<=delta)]
+        if len(torch.where(pred>delta)) != 0:
+            index = np.where(pred.detach().cpu().numpy()>delta)
+            G = act_0.grad.cpu().data.numpy()[index]
+            act_np = act.detach().cpu().numpy()[index]
             act_base = act_np * 0
             gamma = 0.0
-            epsilon = (1 - gamma) * abs(np.asarray(delta) - self.Q_init)
-            top = np.matmul(np.transpose(G), act_np - act_base) - epsilon
-            bot = np.matmul(np.transpose(G), G)
-            lam = max(0, top / bot)
-            act = act + torch.as_tensor(lam * G, dtype=torch.float32).to(self.device)
-            
-            return act.detach().cpu().numpy()
-    
+            epsilon = (1 - gamma) * abs(np.asarray(delta) - self.Q_init[index])
+            top = np.sum(G * (act_np - act_base), axis=1) -epsilon
+            bot = np.sum(G * G, axis=1)
+            lam = top / bot
+            lam[np.where(lam<0)] = 0.0
+            tmp = np.concatenate((lam.reshape(-1,1), lam.reshape(-1,1)), axis=1) * G
+            tmp = torch.as_tensor(tmp, dtype=torch.float32).to(self.device)
+            act_new = act[index] + tmp
+            act_result[index] = act_new
+        
+        return act_result.detach()
 
 
 class MLPActorCritic(nn.Module):
@@ -218,7 +230,7 @@ class MLPActorCritic(nn.Module):
             v = self.v(obs)
              
             qc = self.ccritic(torch.cat((obs,a), axis=1))
-        return a.cpu().numpy(), v.cpu().numpy(), logp_a.cpu().numpy(), pi.mean.cpu().numpy(), torch.log(pi.stddev).cpu().numpy(), qc.cpu().numpy()
+        return a, v, logp_a, pi.mean, torch.log(pi.stddev), qc
 
     def act(self, obs):
         return self.step(obs)[0]

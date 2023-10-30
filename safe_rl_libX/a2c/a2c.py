@@ -41,7 +41,7 @@ class A2CBufferX:
         self.max_ep_len = max_ep_len
         self.env_num = env_num
 
-    def store(self, obs, act, rew, val, logp, mu, logstd):
+    def store(self, obs, act, rew, val, logp):
         """
         Append one timestep of agent-environment interaction to the buffer.
         All input are env_num batch elements. E.g. shape(obs) = (env_num, obs_shape).
@@ -78,6 +78,8 @@ class A2CBufferX:
         if np.all(self.path_start_idx == 0) and np.all(self.ptr == self.max_ep_len):
             # simplest case, all enviroment is done at end batch episode, 
             # proceed with batch operation
+            if len(last_val.shape) == 1:
+                last_val = last_val.unsqueeze(1)
             assert last_val.shape == (self.env_num, 1)
             rews = torch.hstack((self.rew_buf, last_val))
             vals = torch.hstack((self.val_buf, last_val))

@@ -85,6 +85,8 @@ class APOBufferX:
         if np.all(self.path_start_idx == 0) and np.all(self.ptr == self.max_ep_len):
             # simplest case, all enviroment is done at end batch episode, 
             # proceed with batch operation
+            if len(last_val.shape) == 1:
+                last_val = last_val.unsqueeze(1)
             assert last_val.shape == (self.env_num, 1)
             rews = torch.hstack((self.rew_buf, last_val))
             vals = torch.hstack((self.val_buf, last_val))
@@ -94,7 +96,7 @@ class APOBufferX:
             self.adv_buf = torch.from_numpy(core.batch_discount_cumsum(deltas, self.gamma * self.lam).astype(np.float32)).to(device)
             
             # advantage of evert (s,a) pair
-            self.adv_pair_buf = torch.from_numpy(deltas.astype(np.float32)).to(device)
+            self.adv_pair_buf = deltas.to(device)
             
             # the next line computes rewards-to-go, to be targets for the value function
             self.ret_buf = torch.from_numpy(core.batch_discount_cumsum(rews, self.gamma)[:,:-1].astype(np.float32)).to(device)

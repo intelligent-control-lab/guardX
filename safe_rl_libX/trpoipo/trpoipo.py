@@ -89,6 +89,7 @@ class TRPOIPOBufferX:
         if np.all(self.path_start_idx == 0) and np.all(self.ptr == self.max_ep_len):
             # simplest case, all enviroment is done at end batch episode, 
             # proceed with batch operation
+            last_val = last_val.view(-1,1)
             assert last_val.shape == (self.env_num, 1)
             rews = torch.hstack((self.rew_buf, last_val))
             vals = torch.hstack((self.val_buf, last_val))
@@ -100,7 +101,7 @@ class TRPOIPOBufferX:
             # the next line computes rewards-to-go, to be targets for the value function
             self.ret_buf = torch.from_numpy(core.batch_discount_cumsum(rews, self.gamma)[:,:-1].astype(np.float32)).to(device)
             
-            self.epi_id_buf = 0
+            self.epi_id_buf = torch.zeros(self.epi_id_buf.shape).to(device)
         else:
             # path slice are different for each environment, 
             # separate treatement is required for each environment
@@ -134,6 +135,7 @@ class TRPOIPOBufferX:
         assert self.ptr[0] == self.max_ep_len    # buffer has to be full before you can get
         self.ptr = np.zeros(self.env_num, dtype=np.int16)
         self.path_start_idx = np.zeros(self.env_num, dtype=np.int16)
+        self.epi_id = np.zeros(self.env_num, dtype=np.int16)
         # the next two lines implement the advantage normalization trick
         def normalized_advantage(adv_buf_instance):
             adv_mean, adv_std = mpi_statistics_scalar(adv_buf_instance)
@@ -147,6 +149,7 @@ class TRPOIPOBufferX:
         
         data = dict(obs=self.obs_buf.view(self.env_num * self.max_ep_len, self.obs_buf.shape[-1]), 
                     act=self.act_buf.view(self.env_num * self.max_ep_len, self.act_buf.shape[-1]),
+                    cost=self.cost_buf.view(self.env_num * self.max_ep_len),
                     ret=self.ret_buf.view(self.env_num * self.max_ep_len),
                     adv=self.adv_buf.view(self.env_num * self.max_ep_len),
                     logp=self.logp_buf.view(self.env_num * self.max_ep_len),
@@ -381,8 +384,8 @@ def trpoipo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         n_epi = int(epi_id.max().item() + 1)
         J_C_pi = 0
         for i in range(n_epi):
-            j = np.where(epi_id == i)[0][0]
-            k = np.where(epi_id == i)[0][-1] + 1
+            j = torch.where(epi_id == i)[0][0]
+            k = torch.where(epi_id == i)[0][-1] + 1
             ratio = torch.exp( torch.sum(logp[j:k]) - torch.sum(logp_old[j:k]))
             J_C_pi += ( ratio * torch.sum(cost[j:k]))
         J_C_pi /= n_epi
@@ -483,7 +486,7 @@ def trpoipo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # reset environment
     o = env.reset()
     # return, length, cost of env_num batch episodes
-    ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num) 
+    ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
     # cum_cost is the cumulative cost over the training
     cum_cost = 0 
 
@@ -502,8 +505,9 @@ def trpoipo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             
             # update return, length, cost of env_num batch episodes
             ep_ret += r.cpu().numpy().squeeze()
+            ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t)
             ep_len += 1
-            # ep_cost += np.asarray([info_episode.cpu().numpy().squeeze() for info_episode in info['cost']])
+            
             assert ep_cost.shape == info['cost'].cpu().numpy().squeeze().shape
             ep_cost += info['cost'].cpu().numpy().squeeze()
 
@@ -525,19 +529,22 @@ def trpoipo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     # logger.store(EpRet=ep_ret, EpLen=ep_len, EpCost=ep_cost)
                     logger.store(EpRet=ep_ret[np.where(ep_len == max_ep_len)],
                                  EpLen=ep_len[np.where(ep_len == max_ep_len)],
+                                 EpCostRet=ep_cost_ret[np.where(ep_len == max_ep_len)],
                                  EpCost=ep_cost[np.where(ep_len == max_ep_len)])
                     buf.finish_path(v, done)
                     # reset environment 
                     o = env.reset()
-                    ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num)
+                    ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
                 else:
                     # trajectory finished for some environment
                     done = d.cpu().numpy() # finish path for certain environments
                     v[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0]).to(device)
                     
-                    logger.store(EpRet=ep_ret[np.where(done == 1)], EpLen=ep_len[np.where(done == 1)], EpCost=ep_cost[np.where(done == 1)])
-                    ep_ret[np.where(done == 1)], ep_len[np.where(done == 1)], ep_cost[np.where(done == 1)]\
+                    logger.store(EpRet=ep_ret[np.where(done == 1)], EpLen=ep_len[np.where(done == 1)],
+                                 EpCostRet=ep_cost_ret[np.where(done == 1)],  EpCost=ep_cost[np.where(done == 1)])
+                    ep_ret[np.where(done == 1)], ep_len[np.where(done == 1)], ep_cost[np.where(done == 1)], ep_cost_ret[np.where(done == 1)]\
                         =   np.zeros(np.where(done == 1)[0].shape[0]), \
+                            np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0])
                     
@@ -561,6 +568,7 @@ def trpoipo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpCost', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
+        logger.log_tabular('EpCostRet', with_min_and_max=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
         logger.log_tabular('CostRate', cost_rate)
         logger.log_tabular('VVals', with_min_and_max=True)
