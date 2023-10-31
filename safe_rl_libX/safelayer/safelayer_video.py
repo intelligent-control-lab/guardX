@@ -23,7 +23,6 @@ def create_env(args):
     env =  safe_rl_envs_Engine(configuration(args.task))
     return env
 
-
 def replay(env_fn, model_path=None, video_name=None, max_epoch=1):
     if not model_path:
         print("please specify a model path")
@@ -37,6 +36,7 @@ def replay(env_fn, model_path=None, video_name=None, max_epoch=1):
     
     # reset environment
     o = env.reset()
+    prev_c = 0
     d = False
     ep_ret = 0
     time_step = 0
@@ -58,6 +58,7 @@ def replay(env_fn, model_path=None, video_name=None, max_epoch=1):
                 break
             ep_ret = 0
             o = env.reset()
+            prev_c = 0
         
         try:
             a, v, logp, _, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
@@ -65,11 +66,12 @@ def replay(env_fn, model_path=None, video_name=None, max_epoch=1):
             print('please choose the correct environment, the observation space doesn''t match')
             raise NotImplementedError
         
-
-        next_o, r, d, _ = env.step(a)
+        a_corrected = ac.ccritic.safety_correction(o, a, prev_c)
+        next_o, r, d, info = env.step(a_corrected)
         
         # Update obs (critical!)
         o = next_o
+        prev_c = info['cost']
 
         img_array = env.render(mode='rgb_array')
         video_array.append(img_array)
@@ -96,7 +98,7 @@ def replay(env_fn, model_path=None, video_name=None, max_epoch=1):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
-    parser.add_argument('--task', type=str, default='Goal_Point')
+    parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
     parser.add_argument('--max_epoch', type=int, default=1)  # the maximum number of epochs
     parser.add_argument('--model_path', type=str, default=None)
     parser.add_argument('--video_name', type=str, default=None)
