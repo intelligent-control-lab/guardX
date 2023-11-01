@@ -652,7 +652,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # Track cumulative cost over training
             cum_cost += info['cost'].cpu().numpy().squeeze().sum()
             ep_ret += r.cpu().numpy().squeeze()
-            ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t)
+            ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t) # useless metrics for scpo
             ep_len += 1
             
             assert ep_cost.shape == info['cost'].cpu().numpy().squeeze().shape
@@ -729,7 +729,6 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', average_only=True)
         logger.log_tabular('EpLen', average_only=True)
-        logger.log_tabular('EpCostRet', with_min_and_max=True)
         logger.log_tabular('EpCost', average_only=True)
         logger.log_tabular('EpMaxCost', average_only=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
