@@ -5,25 +5,40 @@ import numpy as np
 import torch
 import time
 import mediapy as media
-num_envs = 1
+from jax import numpy as jp
+num_envs = 2048
 config = {'num_envs':num_envs}
 env = Engine(config)
 obs = env.reset()
-
+env.done = jp.ones(num_envs)
+env.reset_done()
 t = time.time()
 print("start")
 images = []
 model_path = '/home/yifan/guardX/guardX/safe_rl_libX/trpo_guardX/logs/Goal_Point_8Hazards_trpo_kl0.02_epochs10_step400000/Goal_Point_8Hazards_trpo_kl0.02_epochs10_step400000_s0/pyt_save/model.pt'
 ac = torch.load(model_path)
+reward_list = []
+
 for i in range(1000):
+    # print(i)
     act = np.random.uniform(-1,1,(num_envs, env.action_space.shape[0]))
     # act = np.zeros(env.action_space.shape)
     act = torch.from_numpy(act).reshape(num_envs,-1)
     # act, v, logp, _, _ = ac.step(obs)
     obs, reward, done, info = env.step(act)
-    env.render()
-    # if done > 0:
-    #     import ipdb;ipdb.set_trace()
+    # reward_list.append(reward)
+    
+    
+    # env.render()
+    if done.cpu().numpy().any() >  0:
+        # reward_list = torch.tensor(reward_list)
+        # print(torch.sum(reward_list))
+        # print("###############  ", np.sum(done.cpu().numpy()))
+        obs = env.reset_done()
+        # import ipdb;ipdb.set_trace()
+        # reward_list = []
+    # if i%100 == 0:
+    #     obs = env.reset()
     # images.append(env.render())
 print("finish ", time.time() - t)
 # print(obs.shape)

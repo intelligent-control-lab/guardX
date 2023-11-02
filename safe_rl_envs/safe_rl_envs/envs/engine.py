@@ -190,6 +190,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self.body_name2id = {}
         
         self.seed()
+        # path = 'xmls/barkour_v0/assets/barkour.xml'
         path = 'xmls/point.xml'
         self.robot = Robot(path)
         base_path = os.path.join(BASE_DIR, path)
@@ -210,16 +211,26 @@ class Engine(gym.Env, gym.utils.EzPickle):
             return jax.vmap(self.mjx_reset)(rng)
         
         # Use jax.vmap to warp single environment step to batched step function
-        def batched_step(data: mjx.Data, last_data: mjx.Data, last_last_data: mjx.Data, action: jax.Array, rng: jax.Array):
+        def batched_step(data: mjx.Data, last_data: mjx.Data, last_last_data: mjx.Data, action: jax.Array):
+            return jax.vmap(self.mjx_step)(data, last_data, last_last_data, action)
+    
+        def batched_reset_done(data: mjx.Data,
+                               last_data: mjx.Data,
+                               last_last_data: mjx.Data,
+                               last_last_last_data: mjx.Data,
+                               done: jax.Array, 
+                               rng: jax.Array):
             if self.num_envs is not None:
                 rng = jax.random.split(rng, self.num_envs)
-            return jax.vmap(self.mjx_step)(data, last_data, last_last_data, action, rng)
+            return jax.vmap(self.mjx_reset_done)(data, last_data, last_last_data, last_last_last_data, done, rng)
     
         self._reset = jax.jit(batched_reset) # Use Just In Time (JIT) compilation to execute batched reset efficiently
         self._step = jax.jit(batched_step) # Use Just In Time (JIT) compilation to execute batched step efficiently
+        self._reset_done = jax.jit(batched_reset_done)
         self.data = None # Keep track of the current state of the whole batched environment with self.data
         self.last_data = None
         self.last_last_data = None
+        self.last_last_last_data = None
         self.viewer = None
         self.hazards_placements = [-2,2]
         
@@ -231,10 +242,14 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self.done = None
         self.build_observation_space()
         self.body_name2id = {}
-        self.body_name2id['floor'] = 0
-        self.body_name2id['robot'] = 1
-        self.body_name2id['goal'] = 2
-        self.body_name2id['hazards'] = [3,4,5,6,7,8,9,10]
+        self.body_name2id['floor'] = self.mj_model.geom('floor').id
+        self.body_name2id['robot'] = self.mj_model.geom('robot').id
+        self.body_name2id['goal'] = self.mj_model.geom('goal').id
+        self.body_name2id['hazards'] = []
+        for i in range(self.mj_model.ngeom):
+            if 'hazard' in self.mj_model.geom(i).name:
+                self.body_name2id['hazards'].append(i)
+        
         
     # @property
     # def model(self):
@@ -320,6 +335,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self.key = jax.random.PRNGKey(self._seed)
 
     def update_data(self):
+        self.last_last_last_data = deepcopy(self.last_last_data)
         self.last_last_data = deepcopy(self.last_data)
         self.last_data = deepcopy(self.data)
 
@@ -328,8 +344,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
         layout = self.build_layout(rng)
         data = self.mjx_data
         xpos = self.mjx_data.xpos
-        xpos = xpos.at[3:].set(layout["hazards_pos"])
-        xpos = xpos.at[2].set(layout["goal_pos"][0])
+        xpos = xpos.at[-8:].set(layout["hazards_pos"])
+        xpos = xpos.at[-9].set(layout["goal_pos"][0])
         data = mjx.forward(self.mjx_model, data)
         last_data = data
         last_last_data = data
@@ -347,8 +363,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
     def mjx_step(self, data: mjx.Data, 
                  last_data: mjx.Data, 
                  last_last_data: mjx.Data, 
-                 action: jp.ndarray,
-                 rng):
+                 action: jp.ndarray):
         """Runs one timestep of the environment's dynamics."""
         def f(data, _):   
             data = data.replace(ctrl=action)
@@ -363,22 +378,84 @@ class Engine(gym.Env, gym.utils.EzPickle):
         info = {}
         info['cost'] = cost
         info['obs'] = obs_dict
+        # qpos_reset = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1.5, maxval=1.5)
+        # ctrl_reset = jp.zeros(self.mjx_model.nu)
+        # qvel_reset = jp.zeros(self.mjx_model.nv)
+        # qpos = jp.where(done > 0.0, x = qpos_reset, y = data.qpos)
+        # ctrl = jp.where(done > 0.0, x = ctrl_reset, y = data.ctrl)
+        # qvel = jp.where(done > 0.0, x = qvel_reset, y = data.qvel)
+        
+        # data = data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
+        # if done is 1.0:
+        #     qpos = jp.where(done > 0.0, x = qpos_reset, y = last_data.qpos)
+        #     ctrl = jp.where(done > 0.0, x = ctrl_reset, y = last_data.ctrl)
+        #     qvel = jp.where(done > 0.0, x = qvel_reset, y = last_data.qvel)
+        #     last_data = last_data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
+        # if last_last_data is not None:
+        #     qpos = jp.where(done > 0.0, x = qpos_reset, y = last_last_data.qpos)
+        #     ctrl = jp.where(done > 0.0, x = ctrl_reset, y = last_last_data.ctrl)
+        #     qvel = jp.where(done > 0.0, x = qvel_reset, y = last_last_data.qvel)
+        #     last_last_data = last_last_data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
+        
+        # data_reset, _ = jax.lax.scan(f, data, (), self.physics_steps_per_control_step)
+        # obs_reset, obs_dict_reset = self.obs(data_reset, None, None)
+        # info['obs_reset'] = jp.where(done > 0.0, x = obs_reset, y = obs)
+        return obs, reward, done, info, data
+    
+    def mjx_reset_done(self,
+                        data: mjx.Data, 
+                        last_data: mjx.Data, 
+                        last_last_data: mjx.Data, 
+                        last_last_last_data: mjx.Data, 
+                        done: jp.ndarray,
+                        rng):
+        """Runs one timestep of the environment's dynamics."""
+        def f(data, _): 
+            return (
+                mjx.step(self.mjx_model, data),
+                None,
+            )
         qpos_reset = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1.5, maxval=1.5)
         ctrl_reset = jp.zeros(self.mjx_model.nu)
         qvel_reset = jp.zeros(self.mjx_model.nv)
-        qpos = jp.where(done > 0.0, x = qpos_reset, y = data.qpos)
-        ctrl = jp.where(done > 0.0, x = ctrl_reset, y = data.ctrl)
-        qvel = jp.where(done > 0.0, x = qvel_reset, y = data.qvel)
-        data = data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
-        data_reset, _ = jax.lax.scan(f, data, (), self.physics_steps_per_control_step)
-        obs_reset, obs_dict_reset = self.obs(data_reset, None, None)
-        info['obs_reset'] = jp.where(done > 0.0, x = obs_reset, y = obs)
-        return obs, reward, done, info, data
+        
+        if last_data is None:
+            last_data = data
+        if last_last_data is None:
+            last_last_data = last_data
+        if last_last_last_data is None:
+            last_last_last_data = last_last_data
+            
+        
+        qpos = jp.where(done > 0.0, x = qpos_reset, y = last_data.qpos)
+        ctrl = jp.where(done > 0.0, x = ctrl_reset, y = last_data.ctrl)
+        qvel = jp.where(done > 0.0, x = qvel_reset, y = last_data.qvel)
+        last_data = last_data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
+        data, _ = jax.lax.scan(f, last_data, (), self.physics_steps_per_control_step)
+    
+
+        qpos = jp.where(done > 0.0, x = qpos_reset, y = last_last_data.qpos)
+        ctrl = jp.where(done > 0.0, x = ctrl_reset, y = last_last_data.ctrl)
+        qvel = jp.where(done > 0.0, x = qvel_reset, y = last_last_data.qvel)
+        last_last_data = last_last_data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
+        last_data, _ = jax.lax.scan(f, last_last_data, (), self.physics_steps_per_control_step)
+    
+
+        qpos = jp.where(done > 0.0, x = qpos_reset, y = last_last_last_data.qpos)
+        ctrl = jp.where(done > 0.0, x = ctrl_reset, y = last_last_last_data.ctrl)
+        qvel = jp.where(done > 0.0, x = qvel_reset, y = last_last_last_data.qvel)
+        last_last_last_data = last_last_last_data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
+        last_last_data, _ = jax.lax.scan(f, last_last_last_data, (), self.physics_steps_per_control_step)
+        
+        # obs, _ = self.obs(data, last_data, last_last_data)
+        obs = []
+        return obs, data, last_data, last_last_data
 
     def reset(self):
         ''' Reset the physics simulation and return observation '''
         obs, reward, self.done, info, self.data = self._reset(self.key)
-        self.info = info
+        self._info = info
+        self._obs = obs
         return jax_to_torch(obs)
     
     def step(self, action):
@@ -388,9 +465,19 @@ class Engine(gym.Env, gym.utils.EzPickle):
         
         self.key,_ = jax.random.split(self.key, 2)
         self.update_data()
-        obs, reward, self.done, info, self.data= self._step(self.data, self.last_data, self.last_last_data, action, self.key)
-        self.info = info
+        obs, reward, self.done, info, self.data = self._step(self.data, self.last_data, self.last_last_data, action)
+        self._info = info
+        self._obs = obs
         return jax_to_torch(obs), jax_to_torch(reward), jax_to_torch(self.done), jax_to_torch(info)
+    
+    def reset_done(self):
+        obs, self.data, self.last_data, self.last_last_data = self._reset_done(self.data,
+                                                                               self.last_data,
+                                                                               self.last_last_data,
+                                                                               self.last_last_last_data,
+                                                                               self.done,
+                                                                               self.key)
+        return jax_to_torch(obs)
     
     def build_layout(self, rng):
         ''' Rejection sample a placement of objects to find a layout. '''
@@ -669,11 +756,11 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self.renderer_scene = self.renderer._scene
         offset = 0.5
         self.viewer.user_scn.ngeom = 0
-        obs = self.info['obs']
+        obs = self._obs
         # self.render_lidar(self.data, obs['hazards_lidar'], COLOR_HAZARD, offset)
         # offset += 0.1
         # self.render_lidar(self.data, obs['goal_lidar'], COLOR_GOAL, offset)
-        self.render_compass(self.data, obs['goal_compass'], COLOR_GOAL, offset)
+        # self.render_compass(self.data, obs['goal_compass'], COLOR_GOAL, offset)
         self.viewer.sync()
         
         return self.renderer.render()
