@@ -8,19 +8,6 @@ import torch.nn as nn
 from torch.distributions.normal import Normal
 from torch.distributions.categorical import Categorical
 
-EPS = 1e-8
-
-def diagonal_gaussian_kl(mu0, log_std0, mu1, log_std1):
-    """
-    torch symbol for mean KL divergence between two batches of diagonal gaussian distributions,
-    where distributions are specified by means and log stds.
-    (https://en.wikipedia.org/wiki/Kullback-Leibler_divergence#Multivariate_normal_distributions)
-    """
-    
-    var0, var1 = torch.exp(2 * log_std0), torch.exp(2 * log_std1)
-    pre_sum = 0.5*(((mu1- mu0)**2 + var0)/(var1 + EPS) - 1) +  log_std1 - log_std0
-    all_kls = torch.sum(pre_sum, axis=1)
-    return torch.mean(all_kls)
 
 def combined_shape(length, shape=None):
     if shape is None:
@@ -57,6 +44,17 @@ def discount_cumsum(x, discount):
     """
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
+def batch_discount_cumsum(x, discount):
+    """the batch discounted cumulative sums of vectors, using magic from rllab
+
+    Args:
+        x (torch.tensor): vector x, shape = (B,length)
+        discount (float): the discount factor
+
+    Returns:
+        torch.tensor: the batch discounted cumulative sums of vectors, shape = (B,length)
+    """
+    return np.asarray([discount_cumsum(x_row, discount) for x_row in x.cpu().numpy()])
 
 class Actor(nn.Module):
 
@@ -76,9 +74,6 @@ class Actor(nn.Module):
             logp_a = self._log_prob_from_distribution(pi, act)
         return pi, logp_a
 
-    def _d_kl(self, obs, old_mu, old_log_std, device):
-        raise NotImplementedError
-
 
 class MLPCategoricalActor(Actor):
     
@@ -89,17 +84,10 @@ class MLPCategoricalActor(Actor):
     def _distribution(self, obs):
         logits = self.logits_net(obs)
         return Categorical(logits=logits)
-        
+
     def _log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act)
-    
-    def _d_kl(self, obs, old_logits, device):
-        logits = self.logits_net(obs)
-        tmp_cat = Categorical(logits=logits)
-        all_kls = (torch.exp(old_logits) * (old_logits - tmp_cat.logits)).sum(axis=1)
-        return all_kls.mean()
-        
-        
+
 
 class MLPGaussianActor(Actor):
 
@@ -116,15 +104,6 @@ class MLPGaussianActor(Actor):
 
     def _log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act).sum(axis=-1)    # Last axis sum needed for Torch Normal distribution
-    
-    def _d_kl(self, obs, old_mu, old_log_std, device):
-        # kl divergence computation 
-        mu = self.mu_net(obs.to(device))
-        log_std = self.log_std 
-        
-        d_kl = diagonal_gaussian_kl(old_mu.to(device), old_log_std.to(device), mu, log_std) # debug test to see if P old in the front helps
-        return d_kl
-
 
 
 class MLPCritic(nn.Module):
@@ -135,6 +114,7 @@ class MLPCritic(nn.Module):
 
     def forward(self, obs):
         return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
+
 
 
 class MLPActorCritic(nn.Module):
@@ -154,7 +134,7 @@ class MLPActorCritic(nn.Module):
             self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation).to(self.device)
 
         # build value function
-        self.v = MLPCritic(obs_dim, hidden_sizes, activation).to(self.device)
+        self.v  = MLPCritic(obs_dim, hidden_sizes, activation).to(self.device)
 
     def step(self, obs):
         with torch.no_grad():
@@ -163,10 +143,7 @@ class MLPActorCritic(nn.Module):
             a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
-        if isinstance(pi, Normal):
-            return a.cpu().numpy(), v.cpu().numpy(), logp_a.cpu().numpy(), pi.mean.cpu().numpy(), torch.log(pi.stddev).cpu().numpy()
-        elif isinstance(pi, Categorical):
-            return a.cpu().numpy(), v.cpu().numpy(), logp_a.cpu().numpy(), pi.logits.cpu().numpy()
+        return a, v, logp_a
 
     def act(self, obs):
         return self.step(obs)[0]

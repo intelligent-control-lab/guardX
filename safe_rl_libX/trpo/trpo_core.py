@@ -1,7 +1,6 @@
 import numpy as np
 import scipy.signal
-from gym.spaces import Box
-from gymnasium.spaces import Discrete
+from gym.spaces import Box, Discrete
 
 import torch
 import torch.nn as nn
@@ -57,6 +56,18 @@ def discount_cumsum(x, discount):
     """
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
+def batch_discount_cumsum(x, discount):
+    """the batch discounted cumulative sums of vectors, using magic from rllab
+
+    Args:
+        x (torch.tensor): vector x, shape = (B,length)
+        discount (float): the discount factor
+
+    Returns:
+        torch.tensor: the batch discounted cumulative sums of vectors, shape = (B,length)
+    """
+    return np.asarray([discount_cumsum(x_row, discount) for x_row in x.cpu().numpy()])
+
 
 class Actor(nn.Module):
 
@@ -89,17 +100,12 @@ class MLPCategoricalActor(Actor):
     def _distribution(self, obs):
         logits = self.logits_net(obs)
         return Categorical(logits=logits)
-        
+
     def _log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act)
     
-    def _d_kl(self, obs, old_logits, device):
-        logits = self.logits_net(obs)
-        tmp_cat = Categorical(logits=logits)
-        all_kls = (torch.exp(old_logits) * (old_logits - tmp_cat.logits)).sum(axis=1)
-        return all_kls.mean()
-        
-        
+    def _d_kl(self, obs, old_mu, old_log_std, device):
+        raise NotImplementedError
 
 class MLPGaussianActor(Actor):
 
@@ -111,6 +117,7 @@ class MLPGaussianActor(Actor):
 
     def _distribution(self, obs):
         mu = self.mu_net(obs)
+        # std = 0.01 + 0.99 * torch.exp(self.log_std)
         std = torch.exp(self.log_std)
         return Normal(mu, std)
 
@@ -126,7 +133,6 @@ class MLPGaussianActor(Actor):
         return d_kl
 
 
-
 class MLPCritic(nn.Module):
 
     def __init__(self, obs_dim, hidden_sizes, activation):
@@ -135,6 +141,7 @@ class MLPCritic(nn.Module):
 
     def forward(self, obs):
         return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
+
 
 
 class MLPActorCritic(nn.Module):
@@ -154,7 +161,7 @@ class MLPActorCritic(nn.Module):
             self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation).to(self.device)
 
         # build value function
-        self.v = MLPCritic(obs_dim, hidden_sizes, activation).to(self.device)
+        self.v  = MLPCritic(obs_dim, hidden_sizes, activation).to(self.device)
 
     def step(self, obs):
         with torch.no_grad():
@@ -163,10 +170,7 @@ class MLPActorCritic(nn.Module):
             a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
-        if isinstance(pi, Normal):
-            return a.cpu().numpy(), v.cpu().numpy(), logp_a.cpu().numpy(), pi.mean.cpu().numpy(), torch.log(pi.stddev).cpu().numpy()
-        elif isinstance(pi, Categorical):
-            return a.cpu().numpy(), v.cpu().numpy(), logp_a.cpu().numpy(), pi.logits.cpu().numpy()
+        return a, v, logp_a, pi.mean, torch.log(pi.stddev)
 
     def act(self, obs):
         return self.step(obs)[0]

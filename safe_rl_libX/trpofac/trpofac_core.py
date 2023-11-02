@@ -1,12 +1,12 @@
 import numpy as np
 import scipy.signal
-from gym.spaces import Box
-from gymnasium.spaces import Discrete
+from gym.spaces import Box, Discrete
 
 import torch
 import torch.nn as nn
 from torch.distributions.normal import Normal
 from torch.distributions.categorical import Categorical
+import torch.nn.functional as F
 
 EPS = 1e-8
 
@@ -57,6 +57,17 @@ def discount_cumsum(x, discount):
     """
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
+def batch_discount_cumsum(x, discount):
+    """the batch discounted cumulative sums of vectors, using magic from rllab
+
+    Args:
+        x (torch.tensor): vector x, shape = (B,length)
+        discount (float): the discount factor
+
+    Returns:
+        torch.tensor: the batch discounted cumulative sums of vectors, shape = (B,length)
+    """
+    return np.asarray([discount_cumsum(x_row, discount) for x_row in x.cpu().numpy()])
 
 class Actor(nn.Module):
 
@@ -75,7 +86,7 @@ class Actor(nn.Module):
         if act is not None:
             logp_a = self._log_prob_from_distribution(pi, act)
         return pi, logp_a
-
+    
     def _d_kl(self, obs, old_mu, old_log_std, device):
         raise NotImplementedError
 
@@ -89,17 +100,13 @@ class MLPCategoricalActor(Actor):
     def _distribution(self, obs):
         logits = self.logits_net(obs)
         return Categorical(logits=logits)
-        
+
     def _log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act)
     
-    def _d_kl(self, obs, old_logits, device):
-        logits = self.logits_net(obs)
-        tmp_cat = Categorical(logits=logits)
-        all_kls = (torch.exp(old_logits) * (old_logits - tmp_cat.logits)).sum(axis=1)
-        return all_kls.mean()
-        
-        
+    def _d_kl(self, obs, old_mu, old_log_std, device):
+        raise NotImplementedError
+
 
 class MLPGaussianActor(Actor):
 
@@ -111,6 +118,7 @@ class MLPGaussianActor(Actor):
 
     def _distribution(self, obs):
         mu = self.mu_net(obs)
+        # std = torch.clamp(0.01 + 0.99 * torch.exp(self.log_std), max=10)
         std = torch.exp(self.log_std)
         return Normal(mu, std)
 
@@ -122,9 +130,8 @@ class MLPGaussianActor(Actor):
         mu = self.mu_net(obs.to(device))
         log_std = self.log_std 
         
-        d_kl = diagonal_gaussian_kl(old_mu.to(device), old_log_std.to(device), mu, log_std) # debug test to see if P old in the front helps
+        d_kl = diagonal_gaussian_kl(old_mu.to(device), old_log_std.to(device), mu, log_std)
         return d_kl
-
 
 
 class MLPCritic(nn.Module):
@@ -135,7 +142,17 @@ class MLPCritic(nn.Module):
 
     def forward(self, obs):
         return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
+    
+    
+class MLPMultiplier(nn.Module):
 
+    def __init__(self, obs_dim, hidden_sizes, activation):
+        super().__init__()
+         # lagrangian multipliers can not be negative
+        self.lam_net = mlp([obs_dim] + list(hidden_sizes) + [1], activation, output_activation=nn.Softplus)
+
+    def forward(self, obs):
+        return torch.squeeze(self.lam_net(obs), -1) # Critical to ensure v has right shape.
 
 class MLPActorCritic(nn.Module):
 
@@ -154,7 +171,13 @@ class MLPActorCritic(nn.Module):
             self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation).to(self.device)
 
         # build value function
-        self.v = MLPCritic(obs_dim, hidden_sizes, activation).to(self.device)
+        self.v  = MLPCritic(obs_dim, hidden_sizes, activation).to(self.device)
+        
+        # build cost value function
+        self.vc  = MLPCritic(obs_dim, hidden_sizes, activation).to(self.device)
+        
+        # lagrangian multiplier 
+        self.lam_net = MLPMultiplier(obs_dim, hidden_sizes, activation).to(self.device) # intiialize the lagrangian multiplier with zero 
 
     def step(self, obs):
         with torch.no_grad():
@@ -163,10 +186,25 @@ class MLPActorCritic(nn.Module):
             a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
-        if isinstance(pi, Normal):
-            return a.cpu().numpy(), v.cpu().numpy(), logp_a.cpu().numpy(), pi.mean.cpu().numpy(), torch.log(pi.stddev).cpu().numpy()
-        elif isinstance(pi, Categorical):
-            return a.cpu().numpy(), v.cpu().numpy(), logp_a.cpu().numpy(), pi.logits.cpu().numpy()
+            vc = self.vc(obs)
+        return a, v, vc, logp_a, pi.mean, torch.log(pi.stddev)
 
     def act(self, obs):
         return self.step(obs)[0]
+    
+    
+# predict state-wise \lamda(s)
+# class MultiplerNet(nn.Module):
+#     def __init__(self, state_dim):
+#         super(MultiplerNet, self).__init__()
+
+#         self.l1 = nn.Linear(state_dim, 64)
+#         self.l2 = nn.Linear(64, 64)
+#         self.l3 = nn.Linear(64, 1)
+
+        
+#     def forward(self, state):
+#         a = F.relu(self.l1(state))
+#         a = F.relu(self.l2(a))
+#         #return F.relu(self.l3(a))
+#         return F.softplus(self.l3(a)) # lagrangian multipliers can not be negative
