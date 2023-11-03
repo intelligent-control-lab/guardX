@@ -390,9 +390,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         
         # log the last data
         data = mjx.forward(self.mjx_model, data)
-        last_data = data
-        last_last_data = data
-        obs, _ = self.obs(data, last_data, last_last_data)
+        obs, _ = self.obs(data, None, None, None, None)
         return obs, data
     
     def mjx_step(self, data: mjx.Data, 
@@ -431,11 +429,6 @@ class Engine(gym.Env, gym.utils.EzPickle):
         qpos_reset = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1.5, maxval=1.5)
         ctrl_reset = jp.zeros(self.mjx_model.nu)
         qvel_reset = jp.zeros(self.mjx_model.nv)
-        
-        if last_data is None:
-            last_data = data
-        if last_last_data is None:
-            last_last_data = last_data
             
         # fake one step forward to get xpos/observation for new initialized jpos
         qpos = jp.where(done > 0.0, x = qpos_reset, y = data.qpos)
@@ -444,7 +437,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         data = data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
         data_reset, _ = jax.lax.scan(f, data, (), self.physics_steps_per_control_step)
         # reset observation treats last done and last last done all true, just use current data 
-        obs_reset, _ = self.obs(data_reset, data, data, done, done)
+        obs_reset, _ = self.obs(data_reset, None, None, None, None)
 
         # reset observation for done environment 
         obs = jp.where(done > 0., x=obs_reset, y=current_obs)
@@ -511,7 +504,9 @@ class Engine(gym.Env, gym.utils.EzPickle):
         dist_goal = self.goal_pos(data)
         
         # upgrade last dist goal computation for auto reset 
-        last_dist_goal = jp.where(last_done > 0.0, x = self.goal_pos(data), y = self.goal_pos(last_data))
+        last_dist_goal = dist_goal
+        if last_done is not None:
+            last_dist_goal = jp.where(last_done > 0.0, x = self.goal_pos(data), y = self.goal_pos(last_data))
         reward = (last_dist_goal - dist_goal) * self.reward_distance
         done = jp.where(dist_goal < self.goal_size, x = 1.0, y = 0.0)
         return reward, done
@@ -620,8 +615,12 @@ class Engine(gym.Env, gym.utils.EzPickle):
         robot_mat = data.xmat[self.body_name2id['robot'],:,:]
 
         # auto update past robot poses for auto reset  
-        robot_pos_last = jp.where(last_done > 0.0, x = robot_pos, y = last_data.xpos[self.body_name2id['robot'],:])
-        robot_pos_last_last = jp.where(last_last_done + last_done > 0.0, x = robot_pos_last, y = last_last_data.xpos[self.body_name2id['robot'],:])
+        robot_pos_last = robot_pos
+        robot_pos_last_last = robot_pos
+        if last_done is not None:
+            robot_pos_last = jp.where(last_done > 0.0, x = robot_pos, y = last_data.xpos[self.body_name2id['robot'],:])
+            if last_last_done is not None:
+                robot_pos_last_last = jp.where(last_last_done + last_done > 0.0, x = robot_pos_last, y = last_last_data.xpos[self.body_name2id['robot'],:])
         # current velocity
         pos_diff_vec_world_frame = robot_pos - robot_pos_last
         vel_vec_world_frame = pos_diff_vec_world_frame / self.dt
