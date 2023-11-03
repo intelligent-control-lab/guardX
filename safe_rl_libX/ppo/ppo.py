@@ -80,6 +80,8 @@ class PPOBufferX:
         if np.all(self.path_start_idx == 0) and np.all(self.ptr == self.max_ep_len):
             # simplest case, all enviroment is done at end batch episode, 
             # proceed with batch operation
+            if len(last_val.shape) == 1:
+                last_val = last_val.unsqueeze(1)
             assert last_val.shape == (self.env_num, 1)
             rews = torch.hstack((self.rew_buf, last_val))
             vals = torch.hstack((self.val_buf, last_val))
@@ -389,6 +391,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     logger.store(EpRet=ep_ret[np.where(ep_len == max_ep_len)],
                                  EpLen=ep_len[np.where(ep_len == max_ep_len)],
                                  EpCost=ep_cost[np.where(ep_len == max_ep_len)])
+                    print(ep_ret[np.where(ep_len == max_ep_len)])
                     buf.finish_path(v, done)
                     # reset environment 
                     o = env.reset()
@@ -397,7 +400,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     # trajectory finished for some environment
                     done = d.cpu().numpy() # finish path for certain environments
                     v[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0]).to(device)
-                    
+                    print(ep_ret[np.where(done == 1)])
                     logger.store(EpRet=ep_ret[np.where(done == 1)], EpLen=ep_len[np.where(done == 1)], EpCost=ep_cost[np.where(done == 1)])
                     ep_ret[np.where(done == 1)], ep_len[np.where(done == 1)], ep_cost[np.where(done == 1)]\
                         =   np.zeros(np.where(done == 1)[0].shape[0]), \
@@ -443,7 +446,10 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 def create_env(args):
     # env =  safe_rl_envs_Engine(configuration(args.task))
     #! TODO: make engine configurable
-    config = {'num_envs':args.env_num}
+    config = {
+        'num_envs':args.env_num,
+        '_seed':args.seed,
+        }
     env = safe_rl_envs_Engine(config)
     return env
 

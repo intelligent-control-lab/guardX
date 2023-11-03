@@ -90,6 +90,8 @@ class LpgBufferX:
         if np.all(self.path_start_idx == 0) and np.all(self.ptr == self.max_ep_len):
             # simplest case, all enviroment is done at end batch episode, 
             # proceed with batch operation
+            if len(last_val.shape) == 1:
+                last_val = last_val.unsqueeze(1)
             assert last_val.shape == (self.env_num, 1)
             rews = torch.hstack((self.rew_buf, last_val))
             vals = torch.hstack((self.val_buf, last_val))
@@ -101,8 +103,8 @@ class LpgBufferX:
             # the next line computes rewards-to-go, to be targets for the value function
             self.ret_buf = torch.from_numpy(core.batch_discount_cumsum(rews, self.gamma)[:,:-1].astype(np.float32)).to(device)
             
-            qcs = torch.hstack((self.qc_buf, torch.zeros(self.env_num, 1)))
-            costs = torch.hstack((self.cost_buf, torch.zeros(self.env_num, 1)))
+            qcs = torch.hstack((self.qc_buf, torch.zeros(self.env_num, 1).to(device)))
+            costs = torch.hstack((self.cost_buf, torch.zeros(self.env_num, 1).to(device)))
             self.targetc_buf = costs[:,:-1] + self.gamma * qcs[:,1:]
             
         else:
@@ -588,7 +590,10 @@ def lpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 def create_env(args):
     # env =  safe_rl_envs_Engine(configuration(args.task))
     #! TODO: make engine configurable
-    config = {'num_envs':args.env_num}
+    config = {
+        'num_envs':args.env_num,
+        '_seed':args.seed,
+        }
     env = safe_rl_envs_Engine(config)
     return env
 
