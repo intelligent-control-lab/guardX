@@ -710,12 +710,13 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                             np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0])
                     
-                    o = info["obs_reset"][np.where(done==1)]
+                    buf.finish_path(v, vc, done)
+                       
+                    # only reset observations for those done environments 
+                    o = env.reset_done()[np.where(done==1)]
                     M[np.where(done == 1)] = torch.zeros((len(np.where(done==1)))).to(device)
                     o_aug[np.where(done == 1)] = torch.cat((o, M[np.where(done == 1)].view(-1,1)), axis=1)
                     first_step[np.where(done == 1)] = np.ones((len(np.where(done==1))))
-                    
-                    buf.finish_path(v, vc, done)
 
         # Save model
         if ((epoch % save_freq == 0) or (epoch == epochs-1)) and model_save:

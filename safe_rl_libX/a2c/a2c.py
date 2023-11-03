@@ -384,6 +384,9 @@ def a2c(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                             np.zeros(np.where(done == 1)[0].shape[0])
                     
                     buf.finish_path(v, done)
+                       
+                    # only reset observations for those done environments 
+                    o = env.reset_done()
 
 
         # Save model

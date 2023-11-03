@@ -588,6 +588,9 @@ def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                             np.zeros(np.where(done == 1)[0].shape[0])
                     
                     buf.finish_path(v, vc, done)
+                       
+                    # only reset observations for those done environments 
+                    o = env.reset_done()
 
         # Save model
         if ((epoch % save_freq == 0) or (epoch == epochs-1)) and model_save:
