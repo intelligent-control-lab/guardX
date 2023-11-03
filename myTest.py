@@ -21,7 +21,7 @@ for i in range(1000):
     act = torch.from_numpy(act).reshape(num_envs,-1)
     # act, v, logp, _, _ = ac.step(obs)
     obs, reward, done, info = env.step(act)
-    env.render()
+    # env.render()
     # if done > 0:
     #     import ipdb;ipdb.set_trace()
     # images.append(env.render())

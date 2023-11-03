@@ -203,7 +203,14 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self.dt = self.mj_model.opt.timestep * self.physics_steps_per_control_step
         print(self.dt)
         self.key = jax.random.PRNGKey(0) # Number of the batched environment
-
+        
+        #----------------------------------------------------------------
+        # define functions
+        # batch step
+        # batch reset for all environment (end of epoch)
+        # batch reset for environments that are done (within epoch)
+        #----------------------------------------------------------------
+        
         # Use jax.vmap to warp single environment reset to batched reset function
         def batched_reset(rng: jax.Array):
             if self.num_envs is not None:
@@ -211,35 +218,47 @@ class Engine(gym.Env, gym.utils.EzPickle):
             return jax.vmap(self.mjx_reset)(rng)
         
         # Use jax.vmap to warp single environment step to batched step function
-        def batched_step(data: mjx.Data, last_data: mjx.Data, last_last_data: mjx.Data, action: jax.Array):
-            return jax.vmap(self.mjx_step)(data, last_data, last_last_data, action)
+        def batched_step(data: mjx.Data, last_data: mjx.Data, last_last_data: mjx.Data, last_done: jax.Array, last_last_done: jax.Array, action: jax.Array):
+            return jax.vmap(self.mjx_step)(data, last_data, last_last_data, last_done, last_last_done, action)
     
         def batched_reset_done(data: mjx.Data,
-                               last_data: mjx.Data,
-                               last_last_data: mjx.Data,
-                               last_last_last_data: mjx.Data,
                                done: jax.Array, 
+                               obs: jax.Array,
                                rng: jax.Array):
             if self.num_envs is not None:
                 rng = jax.random.split(rng, self.num_envs)
-            return jax.vmap(self.mjx_reset_done)(data, last_data, last_last_data, last_last_last_data, done, rng)
+            return jax.vmap(self.mjx_reset_done)(data, done, obs, rng)
     
+        #----------------------------------------------------------------
+        # define batch operation interfaces
+        #----------------------------------------------------------------
         self._reset = jax.jit(batched_reset) # Use Just In Time (JIT) compilation to execute batched reset efficiently
         self._step = jax.jit(batched_step) # Use Just In Time (JIT) compilation to execute batched step efficiently
         self._reset_done = jax.jit(batched_reset_done)
-        self.data = None # Keep track of the current state of the whole batched environment with self.data
-        self.last_data = None
-        self.last_last_data = None
-        self.last_last_last_data = None
+        
+        
+        #----------------------------------------------------------------
+        # define log variables
+        #----------------------------------------------------------------
+        self._data = None # Keep track of the current state of the whole batched environment with self._data
+        self._last_data = None
+        self._last_last_data = None
+        self._done = None
+        self._last_done = None
+        self._last_last_done = None
         self.viewer = None
         self.hazards_placements = [-2,2]
         
+        
+        #----------------------------------------------------------------
+        # define environment configuration, observation, action
+        #----------------------------------------------------------------
         ctrl_range = self.mj_model.actuator_ctrlrange
         ctrl_range[~(self.mj_model.actuator_ctrllimited == 1), :] = np.array([-np.inf, np.inf])
         action = jax.tree_map(np.array, ctrl_range)
         self.action_space = gym.spaces.Box(action[:, 0], action[:, 1], dtype=np.float32)
         # self.action_space = utils.batch_space(action_space, self.num_envs)
-        self.done = None
+        self._done = None
         self.build_observation_space()
         self.body_name2id = {}
         self.body_name2id['floor'] = self.mj_model.geom('floor').id
@@ -249,46 +268,11 @@ class Engine(gym.Env, gym.utils.EzPickle):
         for i in range(self.mj_model.ngeom):
             if 'hazard' in self.mj_model.geom(i).name:
                 self.body_name2id['hazards'].append(i)
-        
-        
-    # @property
-    # def model(self):
-    #     ''' Helper to get the world's model instance '''
-    #     return self.sim.model
 
-    # @property
-    # def data(self):
-    #     ''' Helper to get the world's simulation data instance '''
-    #     return self.sim.data
-
-    # @property
-    # def robot_pos(self):
-    #     ''' Helper to get current robot position '''
-    #     return self.data.get_body_xpos('robot').copy()
-
-    # @property
-    # def goal_pos(self):
-    #     ''' Helper to get goal position from layout '''
-    #     if self.task in ['goal', 'push']:
-    #         return self.data.get_body_xpos('goal').copy()
-    #     elif self.task == 'button':
-    #         return self.data.get_body_xpos(f'button{self.goal_button}').copy()
-    #     elif self.task == 'circle':
-    #         return ORIGIN_COORDINATES
-    #     elif self.task == 'none':
-    #         return np.zeros(2)  # Only used for screenshots
-    #     elif self.task == 'chase':
-    #         return ORIGIN_COORDINATES
-    #     elif self.task == 'defense':
-    #         return ORIGIN_COORDINATES
-    #     else:
-    #         raise ValueError(f'Invalid task {self.task}')
-
-    # @property
-    # def hazards_pos(self):
-    #     ''' Helper to get the hazards positions from layout '''
-    #     return [self.data.get_body_xpos(f'hazard{i}').copy() for i in range(self.hazards_num)]
-
+    #----------------------------------------------------------------
+    # environment configuration functions
+    #----------------------------------------------------------------
+    
     def parse(self, config):
         ''' Parse a config dict - see self.DEFAULT for description '''
         self.config = deepcopy(self.DEFAULT)
@@ -334,35 +318,88 @@ class Engine(gym.Env, gym.utils.EzPickle):
     def seed(self):
         self.key = jax.random.PRNGKey(self._seed)
 
+    #----------------------------------------------------------------
+    # gym wrapper functions
+    #----------------------------------------------------------------
+
     def update_data(self):
-        self.last_last_last_data = deepcopy(self.last_last_data)
-        self.last_last_data = deepcopy(self.last_data)
-        self.last_data = deepcopy(self.data)
+        self._last_last_data = deepcopy(self._last_data)
+        self._last_data = deepcopy(self._data)
+        self._last_last_done = deepcopy(self._last_done)
+        self._last_done = deepcopy(self._done)
+    
+    def reset(self):
+        ''' Reset the physics simulation and return observation '''
+        obs, data = self._reset(self.key)
+        
+        # update the log
+        self._obs = obs
+        self._data = data
+        return jax_to_torch(obs)
+    
+    def step(self, action):
+        ''' Take a step and return observation, reward, done, and info '''
+        # print(action)
+        action = torch_to_jax(action)
+        
+        self.key,_ = jax.random.split(self.key, 2)
+        self.update_data()
+        obs, reward, done, info, data = self._step(self._data, 
+                                                    self._last_data, 
+                                                    self._last_last_data, 
+                                                    self._last_done, 
+                                                    self._last_last_done, 
+                                                    action)
+        # update the current info right after step 
+        self._data = data
+        self._obs = obs
+        self._reward = reward
+        self._done = done
+        self._info = info
+        return jax_to_torch(self._obs), jax_to_torch(self._reward), jax_to_torch(self._done), jax_to_torch(self._info)
+    
+    def reset_done(self):
+        obs, self._data = self._reset_done(self._data,
+                                            self._done,
+                                            self._obs,
+                                            self.key)
+        return jax_to_torch(obs)
+    
+    def build_layout(self, rng):
+        ''' Rejection sample a placement of objects to find a layout. '''
+        # if not self.randomize_layout:
+        #     self.rs = np.random.RandomState(0)
+        rng, rng1, rng2 = jax.random.split(rng, 3)
+        
+        layout = {}
+        layout["hazards_pos"] = jax.random.uniform(rng1, (8,3), minval=self.hazards_placements[0], maxval=self.hazards_placements[1])
+        layout["goal_pos"] = jax.random.uniform(rng1, (1,3), minval=-2.0, maxval=2.0)
+        return layout  
+ 
+    #----------------------------------------------------------------
+    # jax parallel wrapper functions
+    #----------------------------------------------------------------
 
     def mjx_reset(self, rng):
         """ Resets an unbatched environment to an initial state."""
+        #! TODO: update qpose with layout
         layout = self.build_layout(rng)
+        qpos_new = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1, maxval=1)
         data = self.mjx_data
-        xpos = self.mjx_data.xpos
-        xpos = xpos.at[-8:].set(layout["hazards_pos"])
-        xpos = xpos.at[-9].set(layout["goal_pos"][0])
+        data = data.replace(qpos=qpos_new, qvel=jp.zeros(self.mjx_model.nv), ctrl=jp.zeros(self.mjx_model.nu))
+        
+        # log the last data
         data = mjx.forward(self.mjx_model, data)
         last_data = data
         last_last_data = data
-        obs, obs_dict = self.obs(data, last_data, last_last_data)
-        reward, done = self.reward_done(data, last_data)
-        cost = self.cost(data)
-        info = {}
-        info['cost'] = cost
-        info['obs'] = obs_dict
-        qpos_new = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1, maxval=1)
-        qpos = jp.where(done > 0.0, x = qpos_new, y = data.qpos)
-        data = data.replace(qpos=qpos, qvel=jp.zeros(self.mjx_model.nv), ctrl=jp.zeros(self.mjx_model.nu))
-        return obs, reward, done, info, data
+        obs, _ = self.obs(data, last_data, last_last_data)
+        return obs, data
     
     def mjx_step(self, data: mjx.Data, 
                  last_data: mjx.Data, 
                  last_last_data: mjx.Data, 
+                 last_done: jp.ndarray,
+                 last_last_done: jp.ndarray,
                  action: jp.ndarray):
         """Runs one timestep of the environment's dynamics."""
         def f(data, _):   
@@ -372,42 +409,18 @@ class Engine(gym.Env, gym.utils.EzPickle):
                 None,
             )
         data, _ = jax.lax.scan(f, data, (), self.physics_steps_per_control_step)
-        obs, obs_dict = self.obs(data, last_data, last_last_data)
-        reward, done = self.reward_done(data, last_data)
+        obs, obs_dict = self.obs(data, last_data, last_last_data, last_done, last_last_done)
+        reward, done = self.reward_done(data, last_data, last_done)
         cost = self.cost(data)
         info = {}
         info['cost'] = cost
         info['obs'] = obs_dict
-        # qpos_reset = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1.5, maxval=1.5)
-        # ctrl_reset = jp.zeros(self.mjx_model.nu)
-        # qvel_reset = jp.zeros(self.mjx_model.nv)
-        # qpos = jp.where(done > 0.0, x = qpos_reset, y = data.qpos)
-        # ctrl = jp.where(done > 0.0, x = ctrl_reset, y = data.ctrl)
-        # qvel = jp.where(done > 0.0, x = qvel_reset, y = data.qvel)
-        
-        # data = data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
-        # if done is 1.0:
-        #     qpos = jp.where(done > 0.0, x = qpos_reset, y = last_data.qpos)
-        #     ctrl = jp.where(done > 0.0, x = ctrl_reset, y = last_data.ctrl)
-        #     qvel = jp.where(done > 0.0, x = qvel_reset, y = last_data.qvel)
-        #     last_data = last_data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
-        # if last_last_data is not None:
-        #     qpos = jp.where(done > 0.0, x = qpos_reset, y = last_last_data.qpos)
-        #     ctrl = jp.where(done > 0.0, x = ctrl_reset, y = last_last_data.ctrl)
-        #     qvel = jp.where(done > 0.0, x = qvel_reset, y = last_last_data.qvel)
-        #     last_last_data = last_last_data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
-        
-        # data_reset, _ = jax.lax.scan(f, data, (), self.physics_steps_per_control_step)
-        # obs_reset, obs_dict_reset = self.obs(data_reset, None, None)
-        # info['obs_reset'] = jp.where(done > 0.0, x = obs_reset, y = obs)
         return obs, reward, done, info, data
     
     def mjx_reset_done(self,
                         data: mjx.Data, 
-                        last_data: mjx.Data, 
-                        last_last_data: mjx.Data, 
-                        last_last_last_data: mjx.Data, 
                         done: jp.ndarray,
+                        current_obs: jp.ndarray,
                         rng):
         """Runs one timestep of the environment's dynamics."""
         def f(data, _): 
@@ -423,74 +436,31 @@ class Engine(gym.Env, gym.utils.EzPickle):
             last_data = data
         if last_last_data is None:
             last_last_data = last_data
-        if last_last_last_data is None:
-            last_last_last_data = last_last_data
             
-        
-        qpos = jp.where(done > 0.0, x = qpos_reset, y = last_data.qpos)
-        ctrl = jp.where(done > 0.0, x = ctrl_reset, y = last_data.ctrl)
-        qvel = jp.where(done > 0.0, x = qvel_reset, y = last_data.qvel)
-        last_data = last_data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
-        data, _ = jax.lax.scan(f, last_data, (), self.physics_steps_per_control_step)
-    
+        # fake one step forward to get xpos/observation for new initialized jpos
+        qpos = jp.where(done > 0.0, x = qpos_reset, y = data.qpos)
+        ctrl = jp.where(done > 0.0, x = ctrl_reset, y = data.ctrl)
+        qvel = jp.where(done > 0.0, x = qvel_reset, y = data.qvel)
+        data = data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
+        data_reset, _ = jax.lax.scan(f, data, (), self.physics_steps_per_control_step)
+        # reset observation treats last done and last last done all true, just use current data 
+        obs_reset, _ = self.obs(data_reset, data, data, done, done)
 
-        qpos = jp.where(done > 0.0, x = qpos_reset, y = last_last_data.qpos)
-        ctrl = jp.where(done > 0.0, x = ctrl_reset, y = last_last_data.ctrl)
-        qvel = jp.where(done > 0.0, x = qvel_reset, y = last_last_data.qvel)
-        last_last_data = last_last_data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
-        last_data, _ = jax.lax.scan(f, last_last_data, (), self.physics_steps_per_control_step)
-    
+        # reset observation for done environment 
+        obs = jp.where(done > 0., x=obs_reset, y=current_obs)
+        
+        return obs, data
 
-        qpos = jp.where(done > 0.0, x = qpos_reset, y = last_last_last_data.qpos)
-        ctrl = jp.where(done > 0.0, x = ctrl_reset, y = last_last_last_data.ctrl)
-        qvel = jp.where(done > 0.0, x = qvel_reset, y = last_last_last_data.qvel)
-        last_last_last_data = last_last_last_data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
-        last_last_data, _ = jax.lax.scan(f, last_last_last_data, (), self.physics_steps_per_control_step)
-        
-        # obs, _ = self.obs(data, last_data, last_last_data)
-        obs = []
-        return obs, data, last_data, last_last_data
 
-    def reset(self):
-        ''' Reset the physics simulation and return observation '''
-        obs, reward, self.done, info, self.data = self._reset(self.key)
-        self._info = info
-        self._obs = obs
-        return jax_to_torch(obs)
-    
-    def step(self, action):
-        ''' Take a step and return observation, reward, done, and info '''
-        # print(action)
-        action = torch_to_jax(action)
-        
-        self.key,_ = jax.random.split(self.key, 2)
-        self.update_data()
-        obs, reward, self.done, info, self.data = self._step(self.data, self.last_data, self.last_last_data, action)
-        self._info = info
-        self._obs = obs
-        return jax_to_torch(obs), jax_to_torch(reward), jax_to_torch(self.done), jax_to_torch(info)
-    
-    def reset_done(self):
-        obs, self.data, self.last_data, self.last_last_data = self._reset_done(self.data,
-                                                                               self.last_data,
-                                                                               self.last_last_data,
-                                                                               self.last_last_last_data,
-                                                                               self.done,
-                                                                               self.key)
-        return jax_to_torch(obs)
-    
-    def build_layout(self, rng):
-        ''' Rejection sample a placement of objects to find a layout. '''
-        # if not self.randomize_layout:
-        #     self.rs = np.random.RandomState(0)
-        rng, rng1, rng2 = jax.random.split(rng, 3)
-        
-        layout = {}
-        layout["hazards_pos"] = jax.random.uniform(rng1, (8,3), minval=self.hazards_placements[0], maxval=self.hazards_placements[1])
-        layout["goal_pos"] = jax.random.uniform(rng1, (1,3), minval=-2.0, maxval=2.0)
-        return layout
- 
-    def obs(self, data: mjx.Data, last_data: mjx.Data, last_last_data: mjx.Data):
+    #----------------------------------------------------------------
+    # observation, reward and cost functions
+    #----------------------------------------------------------------
+
+    def obs(self, data: mjx.Data, 
+            last_data: mjx.Data, 
+            last_last_data: mjx.Data, 
+            last_done: jp.ndarray, 
+            last_last_done: jp.ndarray):
         # get the raw position data of different objects current frame 
         obs = {}
 
@@ -499,7 +469,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
             last_data = data
         if last_last_data is None:
             last_last_data = last_data
-        vel, acc = self.ego_vel_acc(data, last_data, last_last_data)
+        vel, acc = self.ego_vel_acc(data, last_data, last_last_data, last_done, last_last_done)
         
         if self.observe_goal_lidar:
             obs['goal_lidar'] = self.obs_lidar(data, data.xpos[self.body_name2id['goal'],:])
@@ -527,7 +497,38 @@ class Engine(gym.Env, gym.utils.EzPickle):
                 flat_obs.append(obs[k].flatten())
             flat_obs = jp.concatenate(flat_obs)
         return flat_obs, obs
+
+    def goal_pos(self, data: mjx.Data) -> jp.ndarray:
+            xpos = data.xpos.reshape(-1,3)
+            robot_pos = xpos[self.body_name2id['robot'],:]
+            goal_pos = xpos[self.body_name2id['goal'],:]
+            dist_goal = jp.sqrt(jp.sum(jp.square(goal_pos[:2] - robot_pos[:2]))) 
+            return dist_goal
+
+    def reward_done(self, data: mjx.Data, last_data: mjx.Data, last_done:jp.ndarray) -> Tuple[jp.ndarray, jp.ndarray]:        
+        # get raw data of robot pos and goal pos
         
+        dist_goal = self.goal_pos(data)
+        
+        # upgrade last dist goal computation for auto reset 
+        last_dist_goal = jp.where(last_done > 0.0, x = self.goal_pos(data), y = self.goal_pos(last_data))
+        reward = (last_dist_goal - dist_goal) * self.reward_distance
+        done = jp.where(dist_goal < self.goal_size, x = 1.0, y = 0.0)
+        return reward, done
+    
+    def cost(self, data: mjx.Data) -> jp.ndarray:
+        # get the raw position data of different objects current frame 
+        robot_pos = data.xpos[self.body_name2id['robot'],:].reshape(-1,3)
+        hazards_pos = data.xpos[self.body_name2id['hazards'],:].reshape(-1,3)
+        dist_robot2hazard = jp.linalg.norm(hazards_pos[:,:2] - robot_pos[:,:2], axis=1)
+        dist_robot2hazard_below_threshold = jp.minimum(dist_robot2hazard, self.hazards_size)
+        cost = jp.sum(self.hazards_size*jp.ones(dist_robot2hazard_below_threshold.shape) - dist_robot2hazard_below_threshold)
+        return cost 
+    
+    #----------------------------------------------------------------
+    # Computation Auxiliary functions
+    #----------------------------------------------------------------
+    
     def ego_xy(self, pos, data):
         xpos = data.xpos.reshape(-1,3)
         xmat = data.xmat.reshape(-1,3,3)
@@ -613,12 +614,14 @@ class Engine(gym.Env, gym.utils.EzPickle):
                 obs = obs.at[bin_minus].set(jp.maximum(obs[bin_minus], (1 - alias_jp) * sensor))
         return obs
     
-    def ego_vel_acc(self, data, last_data, last_last_data):
+    def ego_vel_acc(self, data, last_data, last_last_data, last_done, last_last_done):
         '''velocity and acceleration in the robot frame '''
         robot_pos = data.xpos[self.body_name2id['robot'],:]
         robot_mat = data.xmat[self.body_name2id['robot'],:,:]
-        robot_pos_last = last_data.xpos[self.body_name2id['robot'],:]
-        robot_pos_last_last = last_last_data.xpos[self.body_name2id['robot'],:]
+
+        # auto update past robot poses for auto reset  
+        robot_pos_last = jp.where(last_done > 0.0, x = robot_pos, y = last_data.xpos[self.body_name2id['robot'],:])
+        robot_pos_last_last = jp.where(last_last_done + last_done > 0.0, x = robot_pos_last, y = last_last_data.xpos[self.body_name2id['robot'],:])
         # current velocity
         pos_diff_vec_world_frame = robot_pos - robot_pos_last
         vel_vec_world_frame = pos_diff_vec_world_frame / self.dt
@@ -635,34 +638,11 @@ class Engine(gym.Env, gym.utils.EzPickle):
         acc_vec_robot_frame = jp.matmul(acc_vec_world_frame, robot_mat)[:2] # only take XY coordinates
         
         return vel_vec_robot_frame, acc_vec_robot_frame
-
-    def goal_pos(self, data: mjx.Data) -> jp.ndarray:
-            xpos = data.xpos.reshape(-1,3)
-            robot_pos = xpos[self.body_name2id['robot'],:]
-            goal_pos = xpos[self.body_name2id['goal'],:]
-            dist_goal = jp.sqrt(jp.sum(jp.square(goal_pos[:2] - robot_pos[:2]))) 
-            return dist_goal
-
-    def reward_done(self, data: mjx.Data, last_data: mjx.Data) -> Tuple[jp.ndarray, jp.ndarray]:        
-        # get raw data of robot pos and goal pos
-        
-        dist_goal = self.goal_pos(data)
-        last_dist_goal = self.goal_pos(last_data)
-        reward = (last_dist_goal - dist_goal) * self.reward_distance
-        done = jp.where(dist_goal < self.goal_size, x = 1.0, y = 0.0)
-        #! TODO: update the last dist goal 
-        return reward, done
+   
+    #----------------------------------------------------------------
+    # Render functions
+    #----------------------------------------------------------------
     
-    def cost(self, data: mjx.Data) -> jp.ndarray:
-        # get the raw position data of different objects current frame 
-        robot_pos = data.xpos[self.body_name2id['robot'],:].reshape(-1,3)
-        hazards_pos = data.xpos[self.body_name2id['hazards'],:].reshape(-1,3)
-        dist_robot2hazard = jp.linalg.norm(hazards_pos[:,:2] - robot_pos[:,:2], axis=1)
-        dist_robot2hazard_below_threshold = jp.minimum(dist_robot2hazard, self.hazards_size)
-        cost = jp.sum(self.hazards_size*jp.ones(dist_robot2hazard_below_threshold.shape) - dist_robot2hazard_below_threshold)
-        return cost 
-       
-
     def render_sphere(self, pos, size, color, label='', alpha=0.1):
         pass
 
@@ -740,7 +720,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
 
     def render(self):
         data = self.mj_data
-        mjx.device_get_into(data, self.data)
+        mjx.device_get_into(data, self._data)
         self.mj_model.vis.global_.offwidth = DEFAULT_WIDTH
         self.mj_model.vis.global_.offheight = DEFAULT_HEIGHT
         if self.viewer is None:
@@ -757,10 +737,10 @@ class Engine(gym.Env, gym.utils.EzPickle):
         offset = 0.5
         self.viewer.user_scn.ngeom = 0
         obs = self._obs
-        # self.render_lidar(self.data, obs['hazards_lidar'], COLOR_HAZARD, offset)
+        # self.render_lidar(self._data, obs['hazards_lidar'], COLOR_HAZARD, offset)
         # offset += 0.1
-        # self.render_lidar(self.data, obs['goal_lidar'], COLOR_GOAL, offset)
-        # self.render_compass(self.data, obs['goal_compass'], COLOR_GOAL, offset)
+        # self.render_lidar(self._data, obs['goal_lidar'], COLOR_GOAL, offset)
+        # self.render_compass(self._data, obs['goal_compass'], COLOR_GOAL, offset)
         self.viewer.sync()
         
         return self.renderer.render()
