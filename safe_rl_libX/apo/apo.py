@@ -87,6 +87,8 @@ class APOBufferX:
             # proceed with batch operation
             if len(last_val.shape) == 1:
                 last_val = last_val.unsqueeze(1)
+            if len(last_val.shape) == 1:
+                last_val = last_val.unsqueeze(1)
             assert last_val.shape == (self.env_num, 1)
             rews = torch.hstack((self.rew_buf, last_val))
             vals = torch.hstack((self.val_buf, last_val))
@@ -384,8 +386,8 @@ def apo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         mean_var_surr = omega_1 * abs(tmp_1+tmp_2*omega_2).mean()
         
         if detailed:
-            kl_div = abs((logp_old - logp).mean().item())
-            epsilon = max(adv)
+            kl_div = torch.abs((logp_old - logp).mean()).item()
+            epsilon = torch.max(adv)
             bias = 4*gamma*kl_div*epsilon/(1-gamma)**2
             min_J_square = mean_surr**2 + 2*val.mean()*mean_surr
             if mean_surr + val.mean() - bias < 0:
@@ -586,7 +588,10 @@ def apo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 def create_env(args):
     # env =  safe_rl_envs_Engine(configuration(args.task))
     #! TODO: make engine configurable
-    config = {'num_envs':args.env_num}
+    config = {
+        'num_envs':args.env_num,
+        '_seed':args.seed,
+        }
     env = safe_rl_envs_Engine(config)
     return env
 
@@ -608,7 +613,7 @@ if __name__ == '__main__':
     parser.add_argument('--omega1', type=float, default=0.001)       
     parser.add_argument('--omega2', type=float, default=0.005)       
     parser.add_argument('--k', '-k', type=float, default=10.5)
-    parser.add_argument('--detailed', '-d', action='store_true', default=False)  
+    parser.add_argument('--notdetailed', '-d', action='store_false', default=True)  
     args = parser.parse_args()
 
     mpi_fork(args.cpu)  # run parallel code with mpi
@@ -624,4 +629,4 @@ if __name__ == '__main__':
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
         seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
         logger_kwargs=logger_kwargs, model_save=model_save, target_kl=args.target_kl,
-        k=args.k, omega_1=args.omega1, omega_2=args.omega2, detailed=args.detailed)
+        k=args.k, omega_1=args.omega1, omega_2=args.omega2, detailed=args.notdetailed)
