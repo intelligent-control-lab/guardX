@@ -500,6 +500,8 @@ def trpolag(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     o = env.reset()
     ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
     cum_cost = 0 
+    
+    max_ep_len_ret = np.zeros(env_num)
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
@@ -512,11 +514,12 @@ def trpolag(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # Track cumulative cost over training
             cum_cost += info['cost'].cpu().numpy().squeeze().sum()
             ep_ret += r.cpu().numpy().squeeze()
-            ep_cost_ret += info['cost'].cpu().numpy().squeeze().sum() * (gamma ** t)
+            max_ep_len_ret += r.cpu().numpy().squeeze()
+            ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t)
             ep_len += 1
             
             assert ep_cost.shape == info['cost'].cpu().numpy().squeeze().shape
-            ep_cost += info['cost'].cpu().numpy().squeeze().sum()
+            ep_cost += info['cost'].cpu().numpy().squeeze()
 
             # save and log
             buf.store(o, a, r, v, logp, info['cost'], vc, mu, logstd)
@@ -538,6 +541,7 @@ def trpolag(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                                  EpLen=ep_len[np.where(ep_len == max_ep_len)],
                                  EpCostRet=ep_cost_ret[np.where(ep_len == max_ep_len)],
                                  EpCost=ep_cost[np.where(ep_len == max_ep_len)])
+                    logger.store(MaxEpLenRet=max_ep_len_ret)
                     buf.finish_path(v, vc, done)
                     # reset environment 
                     o = env.reset()
@@ -578,13 +582,14 @@ def trpolag(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
-        logger.log_tabular('EpRet', with_min_and_max=True)
+        logger.log_tabular('EpRet', average_only=True)
+        logger.log_tabular('MaxEpLenRet', average_only=True)
+        logger.log_tabular('EpCost', average_only=True)
+        logger.log_tabular('EpCostRet', average_only=True)
         logger.log_tabular('EpLen', average_only=True)
-        logger.log_tabular('EpCost', with_min_and_max=True)
-        logger.log_tabular('EpCostRet', with_min_and_max=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
         logger.log_tabular('CostRate', cost_rate)
-        logger.log_tabular('VVals', with_min_and_max=True)
+        logger.log_tabular('VVals', average_only=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*local_steps_per_epoch)
         logger.log_tabular('LossPi', average_only=True)
         logger.log_tabular('LossV', average_only=True)

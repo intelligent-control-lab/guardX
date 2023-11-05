@@ -472,6 +472,8 @@ def usl(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
     # cum_cost is the cumulative cost over the training
     cum_cost, prev_c = 0, np.zeros(env_num)
+    
+    max_ep_len_ret = np.zeros(env_num)
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
@@ -479,7 +481,8 @@ def usl(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             a, v, logp, mu, logstd, qc = ac.step(torch.as_tensor(o, dtype=torch.float32))
             
             # apply safe layer to get corrected action
-            warmup_ratio = 1.0/3.0
+            # warmup_ratio = 1.0/3.0
+            warmup_ratio = 0.0
             if epoch > epochs * warmup_ratio:
                 a_safe = ac.ccritic.safety_correction(o, a, prev_c)
                 assert a_safe is not a
@@ -495,6 +498,7 @@ def usl(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             
             # update return, length, cost of env_num batch episodes
             ep_ret += r.cpu().numpy().squeeze()
+            max_ep_len_ret += r.cpu().numpy().squeeze()
             ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t)
             ep_len += 1
             
@@ -521,6 +525,7 @@ def usl(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                                  EpLen=ep_len[np.where(ep_len == max_ep_len)],
                                  EpCostRet=ep_cost_ret[np.where(ep_len == max_ep_len)],
                                  EpCost=ep_cost[np.where(ep_len == max_ep_len)])
+                    logger.store(MaxEpLenRet=max_ep_len_ret)
                     buf.finish_path(v, done)
                     # reset environment 
                     o = env.reset()
@@ -561,13 +566,14 @@ def usl(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
-        logger.log_tabular('EpRet', with_min_and_max=True)
-        logger.log_tabular('EpCost', with_min_and_max=True)
+        logger.log_tabular('EpRet', average_only=True)
+        logger.log_tabular('MaxEpLenRet', average_only=True)
         logger.log_tabular('EpLen', average_only=True)
-        logger.log_tabular('EpCostRet', with_min_and_max=True)
+        logger.log_tabular('EpCostRet', average_only=True)
+        logger.log_tabular('EpCost', average_only=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
         logger.log_tabular('CostRate', cost_rate)
-        logger.log_tabular('VVals', with_min_and_max=True)
+        logger.log_tabular('VVals', average_only=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*local_steps_per_epoch)
         logger.log_tabular('LossPi', average_only=True)
         logger.log_tabular('LossV', average_only=True)

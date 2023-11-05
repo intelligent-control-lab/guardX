@@ -633,6 +633,8 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
     cum_cost = 0 
     
+    max_ep_len_ret = np.zeros(env_num)
+    
     M = torch.zeros(env_num, 1, dtype=torch.float32).to(device) # initialize the current maximum cost
     o_aug = torch.cat((o, M), axis=1) # augmented observation = observation + M 
     first_step = np.ones(env_num) # flag for the first step of each episode
@@ -657,6 +659,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # Track cumulative cost over training
             cum_cost += info['cost'].cpu().numpy().squeeze().sum()
             ep_ret += r.cpu().numpy().squeeze()
+            max_ep_len_ret += r.cpu().numpy().squeeze()
             ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t) # useless metrics for scpo
             ep_len += 1
             
@@ -686,6 +689,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                                  EpCostRet=ep_cost_ret[np.where(ep_len == max_ep_len)],
                                  EpCost=ep_cost[np.where(ep_len == max_ep_len)],
                                  EpMaxCost=M.cpu().numpy()[np.where(ep_len == max_ep_len)])
+                    logger.store(MaxEpLenRet=max_ep_len_ret)
                     buf.finish_path(v, vc, done)
                     # reset environment 
                     o = env.reset()
@@ -734,9 +738,10 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', average_only=True)
-        logger.log_tabular('EpLen', average_only=True)
+        logger.log_tabular('MaxEpLenRet', average_only=True)
         logger.log_tabular('EpCost', average_only=True)
         logger.log_tabular('EpMaxCost', average_only=True)
+        logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
         logger.log_tabular('CostRate', cost_rate)
         logger.log_tabular('VVals', average_only=True)
@@ -768,7 +773,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
     parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
-    parser.add_argument('--target_cost', type=float, default=-0.03) # the cost limit for the environment
+    parser.add_argument('--target_cost', type=float, default=-0.05) # the cost limit for the environment
     parser.add_argument('--target_kl', type=float, default=0.02) # the kl divergence limit for SCPO
     parser.add_argument('--cost_reduction', type=float, default=0.) # the cost_reduction limit when current policy is infeasible
     parser.add_argument('--hid', type=int, default=64)

@@ -167,23 +167,54 @@ class C_Critic(nn.Module):
         act = torch.as_tensor(act, dtype=torch.float32).to(self.device)
         act.requires_grad_()
         
-        pred = self.forward(torch.cat((obs,act), axis=1)).item()
-        if pred <= delta:
-            return act.detach().cpu().numpy()
-        else:
+        pred = self.forward(torch.cat((obs,act), axis=1))
+        act_result = torch.zeros(act.shape).to(device=self.device)
+        act_result[torch.where(pred<=delta)] = act[torch.where(pred<=delta)]
+        if len(torch.where(pred>delta)) != 0:
+            index = np.array(np.where(pred.detach().cpu().numpy()>delta)).squeeze()
             for i in range(Niter):
-                if max(np.abs(act.cpu().data.numpy().flatten())) > self.max_action:
-                    break
-                act.retain_grad()
+                max_a, _ = torch.max(act[index], axis=1)
+                max_index = index[np.where(max_a.detach().cpu().numpy() > self.max_action)]
+                act_result[max_index] = act[max_index]
+                index = np.setdiff1d(index, max_index)
+                if index.size == 0:
+                    break;
+                
+                act.requires_grad_()
+                tmp_act = act[index]
+                tmp_act.retain_grad()
                 self.c_net.zero_grad()
-                pred = self.forward(torch.cat((obs,act), axis=1))
-                pred.backward(retain_graph=True)
-                if pred.item() <= delta:
-                    break
-                Z = np.max(np.abs(act.grad.cpu().data.numpy().flatten()))
-                act = act - eta * act.grad / (Z + 1e-8)
+                pred = self.forward(torch.cat((obs[index],tmp_act), axis=1))
+                pred.mean().backward(retain_graph=True)
+                less_index = index[np.where(pred.detach().cpu().numpy()<=delta)]
+                act_result[less_index] = act[less_index]
+                index = np.setdiff1d(index, less_index)
+                if index.size == 0:
+                    break;
+                
+                act.requires_grad_(False)
+                grad_index = np.setdiff1d(np.arange(tmp_act.shape[0]), np.array(np.where(pred.detach().cpu().numpy()<=delta)).squeeze())
+                Z, _ = torch.max(torch.abs(tmp_act.grad[grad_index]), axis=1)
+                act[index] = act[index] - eta * tmp_act.grad[grad_index] / (Z.unsqueeze(-1) + 1e-8)
+                
+            return act_result.detach()
+        
+        # if pred <= delta:
+        #     return act.detach().cpu().numpy()
+        # else:
+        #     for i in range(Niter):
+        #         if max(np.abs(act.cpu().data.numpy().flatten())) > self.max_action:
+        #             break
+        #         act.retain_grad()
+        #         self.c_net.zero_grad()
+        #         pred = self.forward(torch.cat((obs,act), axis=1))
+        #         pred.backward(retain_graph=True)
+        #         if pred.item() <= delta:
+        #             break
+        #         Z = np.max(np.abs(act.grad.cpu().data.numpy().flatten()))
+        #         act = act - eta * act.grad / (Z + 1e-8)
 
-            return act.detach().cpu().numpy()
+        #     return act.detach().cpu().numpy()
     
 
 
