@@ -57,9 +57,9 @@ def run(python_files_and_args, available_devices):
             if process is not None:
                 process.wait()
                 if process.returncode == 0:
-                    print(f"Task {index} executed successfully with arguments: [{arguments}]")
+                    print(f"Task {index} executed successfully with arguments: [{file_path}, {arguments}]")
                 else:
-                    print(f"Task {index} encountered an error with arguments: [{arguments}]")
+                    print(f"Task {index} encountered an error with arguments: [{file_path}, {arguments}]")
     else:
         print("GPU memory is nou enough. Please release the memory manually!")
         # for index, (file_path, arguments) in enumerate(python_files_and_args):
@@ -74,7 +74,7 @@ if __name__ == "__main__":
     
     for num in [1,4,8]:
         for seed in [0,1,2,3]:
-            for algo in ['usl']:
+            for algo in ['trpolag']:
                 python_files_and_args.append((f"{algo}/{algo}.py", f"--epochs 50 --task Goal_Point_{num}Hazards_noconti -s {seed}"))
 
     run(python_files_and_args, [0,1,2,3,4,5,6,7])
