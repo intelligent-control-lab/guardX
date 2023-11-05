@@ -92,6 +92,8 @@ def get_datasets(logdir, condition=None):
                         exp_name = "A2C"
                     elif "pcpo" in config['exp_name']:
                         exp_name = "PCPO"
+                    elif "scpo" in config['exp_name']:
+                        exp_name = "SCPO"
                     elif "cpo" in config['exp_name']:
                         exp_name = "CPO"
                     elif "lpg" in config['exp_name']:
@@ -100,8 +102,6 @@ def get_datasets(logdir, condition=None):
                         exp_name = "PDO"
                     elif "safelayer" in config['exp_name']:
                         exp_name = "SafeLayer"
-                    elif "scpo" in config['exp_name']:
-                        exp_name = "SCPO"
                     elif "usl" in config['exp_name']:
                         exp_name = "USL"
                     else:

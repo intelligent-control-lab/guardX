@@ -694,6 +694,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     # reset environment 
                     o = env.reset()
                     ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
+                    max_ep_len_ret = np.zeros(env_num)
                     M = torch.zeros(env_num, 1, dtype=torch.float32).to(device) # initialize the current maximum cost
                     o_aug = torch.cat((o, M.view(-1,1)), axis=1) # augmented observation = observation + M 
                     first_step = np.ones(env_num)

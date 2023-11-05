@@ -376,6 +376,7 @@ def a2c(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     # reset environment 
                     o = env.reset()
                     ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num)
+                    max_ep_len_ret = np.zeros(env_num)
                 else:
                     # trajectory finished for some environment
                     done = d.cpu().numpy() # finish path for certain environments

@@ -563,7 +563,8 @@ def safelayer(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0
                     buf.finish_path(v, done)
                     # reset environment 
                     o = env.reset()
-                    ep_ret, ep_len, ep_cost, prev_c, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), torch.zeros(env_num, dtype=torch.float32).to(device), np.zeros(env_num)
+                    ep_ret, ep_len, ep_cost, prev_c, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), torch.zeros(env_num).to(device), np.zeros(env_num)
+                    max_ep_len_ret = np.zeros(env_num)
                 else:
                     # trajectory finished for some environment
                     done = d.cpu().numpy() # finish path for certain environments
