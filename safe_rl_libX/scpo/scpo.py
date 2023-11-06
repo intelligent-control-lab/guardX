@@ -705,7 +705,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                             np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0])
                     
-                    o = info["obs_reset"][np.where(done==1)]
+                    o = env.reset_done()[np.where(done==1)]
                     M[np.where(done == 1)] = torch.zeros((len(np.where(done==1)))).to(device)
                     o_aug[np.where(done == 1)] = torch.cat((o, M[np.where(done == 1)].view(-1,1)), axis=1)
                     first_step[np.where(done == 1)] = np.ones((len(np.where(done==1))))
@@ -760,7 +760,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
     parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
-    parser.add_argument('--target_cost', type=float, default=-0.03) # the cost limit for the environment
+    parser.add_argument('--target_cost', type=float, default=-0.1) # the cost limit for the environment
     parser.add_argument('--target_kl', type=float, default=0.02) # the kl divergence limit for SCPO
     parser.add_argument('--cost_reduction', type=float, default=0.) # the cost_reduction limit when current policy is infeasible
     parser.add_argument('--hid', type=int, default=64)
@@ -770,7 +770,7 @@ if __name__ == '__main__':
     parser.add_argument('--cpu', type=int, default=1)
     parser.add_argument('--env_num', type=int, default=400)
     parser.add_argument('--max_ep_len', type=int, default=1000)
-    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--exp_name', type=str, default='scpo_fixed')
     parser.add_argument('--model_save', action='store_true')
     args = parser.parse_args()
@@ -783,7 +783,8 @@ if __name__ == '__main__':
                 + '_' + 'epoch' + str(args.epochs) \
                 + '_' + 'step' + str(args.max_ep_len * args.env_num)
     logger_kwargs = setup_logger_kwargs(exp_name, args.seed)
-
+    
+    t = time.time()
     # whether to save model
     model_save = True if args.model_save else False
     scpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
@@ -791,3 +792,47 @@ if __name__ == '__main__':
         seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
         logger_kwargs=logger_kwargs, target_cost=args.target_cost, 
         model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction)
+    print("finish ", time.time() - t)
+    num_envs = 1
+    config = {'num_envs':num_envs,
+              '_seed':0}
+    env = safe_rl_envs_Engine(config)
+
+    obs = env.reset()
+    t = time.time()
+
+    images = []
+    model_path = '/home/yifan/guardX/guardX/safe_rl_libX/scpo/logs/Goal_Point_8Hazards_scpo_fixed_kl0.02_target_cost-0.05_epoch50_step400000/Goal_Point_8Hazards_scpo_fixed_kl0.02_target_cost-0.05_epoch50_step400000_s0/pyt_save/model.pt'
+    ac = torch.load(model_path)
+    total_reward = 0
+    print("start")
+    M = torch.zeros(num_envs, 1, dtype=torch.float32).to(device) # initialize the current maximum cost
+    o_aug = torch.cat((obs, M), axis=1)
+    first_step = True
+    for i in range(2000):
+        print(i)
+        a, v, vc, logp, mu, logstd = ac.step(o_aug)
+        # import ipdb;ipdb.set_trace()
+        obs, reward, done, info = env.step(a)
+        # import ipdb;ipdb.set_trace()
+        total_reward += reward
+        env.render()
+        if done.cpu().numpy().any() > 0:
+            print("#######")
+            obs = env.reset_done()
+            # import ipdb;ipdb.set_trace()
+        if first_step:
+            # the first step of each episode 
+            cost_increase = info['cost']
+            M_next = info['cost'][None,:]
+            first_step = False
+        else:
+            # the second and forward step of each episode
+            cost_increase = max(info['cost'] - M, 0)
+            M_next = M + cost_increase 
+        
+        # Update obs (critical!)
+        # o = next_o
+        # import ipdb;ipdb.set_trace()
+        o_aug = torch.cat((obs, M_next), axis=1)
+    print("finish ", time.time() - t)
