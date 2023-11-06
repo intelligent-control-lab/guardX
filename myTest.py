@@ -14,14 +14,14 @@ t = time.time()
 print("start")
 images = []
 model_path = '/home/yifan/guardX/guardX/safe_rl_libX/trpo_guardX/logs/Goal_Point_8Hazards_trpo_kl0.02_epochs10_step400000/Goal_Point_8Hazards_trpo_kl0.02_epochs10_step400000_s0/pyt_save/model.pt'
-ac = torch.load(model_path)
+# ac = torch.load(model_path)
 for i in range(1000):
     act = np.random.uniform(-1,1,(num_envs, env.action_space.shape[0]))
     # act = np.zeros(env.action_space.shape)
     act = torch.from_numpy(act).reshape(num_envs,-1)
     # act, v, logp, _, _ = ac.step(obs)
     obs, reward, done, info = env.step(act)
-    # env.render()
+    env.render()
     # if done > 0:
     #     import ipdb;ipdb.set_trace()
     # images.append(env.render())

@@ -77,6 +77,7 @@ class World:
         self.render_context = render_context
         self.update_viewer_sim = False
         self.robot = Robot(self.robot_base)
+        
 
     def parse(self, config):
         ''' Parse a config dict - see self.DEFAULT for description '''
@@ -86,19 +87,19 @@ class World:
             assert key in self.DEFAULT, f'Bad key {key}'
             setattr(self, key, value)
 
-    @property
-    def data(self):
-        ''' Helper to get the simulation data instance '''
-        return self.sim.data
+    # @property
+    # def data(self):
+    #     ''' Helper to get the simulation data instance '''
+    #     return self.sim.data
 
-    # TODO: remove this when mujoco-py fix is merged and a new version is pushed
-    # https://github.com/openai/mujoco-py/pull/354
-    # Then all uses of `self.world.get_sensor()` should change to `self.data.get_sensor`.
-    def get_sensor(self, name):
-        id = self.model.sensor_name2id(name)
-        adr = self.model.sensor_adr[id]
-        dim = self.model.sensor_dim[id]
-        return self.data.sensordata[adr:adr + dim].copy()
+    # # TODO: remove this when mujoco-py fix is merged and a new version is pushed
+    # # https://github.com/openai/mujoco-py/pull/354
+    # # Then all uses of `self.world.get_sensor()` should change to `self.data.get_sensor`.
+    # def get_sensor(self, name):
+    #     id = self.model.sensor_name2id(name)
+    #     adr = self.model.sensor_adr[id]
+    #     dim = self.model.sensor_dim[id]
+    #     return self.data.sensordata[adr:adr + dim].copy()
 
     def build(self):
         ''' Build a world, including generating XML and moving objects '''
@@ -161,7 +162,7 @@ class World:
         # Add floor to the XML dictionary if missing
         if not any(g.get('@name') == 'floor' for g in worldbody['geom']):
             floor = xmltodict.parse('''
-                <geom name="floor" type="plane" condim="6"/>
+                <geom name="floor" type="plane" condim="3"/>
                 ''')
             worldbody['geom'].append(floor['geom'])
 
@@ -281,6 +282,8 @@ class World:
             geom['conaffinity'] = geom.get('conaffinity', 1)
             body = xmltodict.parse('''
                 <body name="{name}" pos="{pos}" quat="{quat}">
+                    <joint type="slide" axis="1 0 0" name="{name}_x" damping="0" limited="false"/>
+                    <joint type="slide" axis="0 1 0" name="{name}_y" damping="0" limited="false"/>
                     <geom name="{name}" type="{type}" size="{size}" rgba="{rgba}" group="{group}"
                         contype="{contype}" conaffinity="{conaffinity}"/>
                 </body>
@@ -292,95 +295,95 @@ class World:
         # Instantiate simulator
         # print(xmltodict.unparse(self.xml, pretty=True))
         self.xml_string = xmltodict.unparse(self.xml)
-        # with open('result.xml', 'w') as result_file:
-        #     result_file.write(xmltodict.unparse(self.xml))
-        self.model = load_model_from_xml(self.xml_string)
-        self.sim = MjSim(self.model)
-
+        print()
+        with open('result.xml', 'w') as result_file:
+            result_file.write(xmltodict.unparse(self.xml, pretty=True))
+        self.model = mujoco.MjModel.from_xml_string(self.xml_string)
+        # self.sim = MjSim(self.model)
         # Add render contexts to newly created sim
-        if self.render_context is None and self.observe_vision:
-            render_context = MjRenderContextOffscreen(self.sim, device_id=-1, quiet=True)
-            render_context.vopt.geomgroup[:] = 1
-            self.render_context = render_context
+        # if self.render_context is None and self.observe_vision:
+        #     render_context = MjRenderContextOffscreen(self.sim, device_id=-1, quiet=True)
+        #     render_context.vopt.geomgroup[:] = 1
+        #     self.render_context = render_context
 
-        if self.render_context is not None:
-            self.render_context.update_sim(self.sim)
+        # if self.render_context is not None:
+        #     self.render_context.update_sim(self.sim)
 
-        # Recompute simulation intrinsics from new position
-        self.sim.forward()
+        # # Recompute simulation intrinsics from new position
+        # self.sim.forward()
 
-    def rebuild(self, config={}, state=True):
-        ''' Build a new sim from a model if the model changed '''
-        if state:
-            old_state = self.sim.get_state()
-        #self.config.update(deepcopy(config))
-        #self.parse(self.config)
-        self.parse(config)
-        self.build()
-        if state:
-            self.sim.set_state(old_state)
-        self.sim.forward()
+    # def rebuild(self, config={}, state=True):
+    #     ''' Build a new sim from a model if the model changed '''
+    #     if state:
+    #         old_state = self.sim.get_state()
+    #     #self.config.update(deepcopy(config))
+    #     #self.parse(self.config)
+    #     self.parse(config)
+    #     self.build()
+    #     if state:
+    #         self.sim.set_state(old_state)
+    #     self.sim.forward()
 
-    def reset(self, build=True):
-        ''' Reset the world (sim is accessed through self.sim) '''
-        if build:
-            self.build()
-        # set flag so that renderer knows to update sim
-        self.update_viewer_sim = True
+    # def reset(self, build=True):
+    #     ''' Reset the world (sim is accessed through self.sim) '''
+    #     if build:
+    #         self.build()
+    #     # set flag so that renderer knows to update sim
+    #     self.update_viewer_sim = True
 
-    def render(self, mode='human'):
-        ''' Render the environment to the screen '''
-        if self.viewer is None:
-            self.viewer = MjViewer(self.sim)
-            # Turn all the geom groups on
-            self.viewer.vopt.geomgroup[:] = 1
-            # Set camera if specified
-            if mode == 'human':
-                self.viewer.cam.fixedcamid = -1
-                self.viewer.cam.type = const.CAMERA_FREE
-            else:
-                self.viewer.cam.fixedcamid = self.model.camera_name2id(mode)
-                self.viewer.cam.type = const.CAMERA_FIXED
-        if self.update_viewer_sim:
-            self.viewer.update_sim(self.sim)
-            self.update_viewer_sim = False
-        self.viewer.render()
+    # def render(self, mode='human'):
+    #     ''' Render the environment to the screen '''
+    #     if self.viewer is None:
+    #         self.viewer = MjViewer(self.sim)
+    #         # Turn all the geom groups on
+    #         self.viewer.vopt.geomgroup[:] = 1
+    #         # Set camera if specified
+    #         if mode == 'human':
+    #             self.viewer.cam.fixedcamid = -1
+    #             self.viewer.cam.type = const.CAMERA_FREE
+    #         else:
+    #             self.viewer.cam.fixedcamid = self.model.camera_name2id(mode)
+    #             self.viewer.cam.type = const.CAMERA_FIXED
+    #     if self.update_viewer_sim:
+    #         self.viewer.update_sim(self.sim)
+    #         self.update_viewer_sim = False
+    #     self.viewer.render()
 
-    def robot_com(self):
-        ''' Get the position of the robot center of mass in the simulator world reference frame '''
-        return self.body_com('robot')
+    # def robot_com(self):
+    #     ''' Get the position of the robot center of mass in the simulator world reference frame '''
+    #     return self.body_com('robot')
 
-    def robot_pos(self):
-        ''' Get the position of the robot in the simulator world reference frame '''
-        return self.body_pos('robot')    
+    # def robot_pos(self):
+    #     ''' Get the position of the robot in the simulator world reference frame '''
+    #     return self.body_pos('robot')    
 
-    def robot_mat(self):
-        ''' Get the rotation matrix of the robot in the simulator world reference frame '''
-        return self.body_mat('robot')
+    # def robot_mat(self):
+    #     ''' Get the rotation matrix of the robot in the simulator world reference frame '''
+    #     return self.body_mat('robot')
 
-    def robot_vel(self):
-        ''' Get the velocity of the robot in the simulator world reference frame '''
-        return self.body_vel('robot')
+    # def robot_vel(self):
+    #     ''' Get the velocity of the robot in the simulator world reference frame '''
+    #     return self.body_vel('robot')
 
-    def body_com(self, name):
-        ''' Get the center of mass of a named body in the simulator world reference frame '''
-        return self.data.subtree_com[self.model.body_name2id(name)].copy()
+    # def body_com(self, name):
+    #     ''' Get the center of mass of a named body in the simulator world reference frame '''
+    #     return self.data.subtree_com[self.model.body_name2id(name)].copy()
 
-    def body_pos(self, name):
-        ''' Get the position of a named body in the simulator world reference frame '''
-        return self.data.get_body_xpos(name).copy()
+    # def body_pos(self, name):
+    #     ''' Get the position of a named body in the simulator world reference frame '''
+    #     return self.data.get_body_xpos(name).copy()
 
-    def body_mat(self, name):
-        ''' Get the rotation matrix of a named body in the simulator world reference frame '''
-        return self.data.get_body_xmat(name).copy()
+    # def body_mat(self, name):
+    #     ''' Get the rotation matrix of a named body in the simulator world reference frame '''
+    #     return self.data.get_body_xmat(name).copy()
 
-    def body_vel(self, name):
-        ''' Get the velocity of a named body in the simulator world reference frame '''
-        return self.data.get_body_xvelp(name).copy()
+    # def body_vel(self, name):
+    #     ''' Get the velocity of a named body in the simulator world reference frame '''
+    #     return self.data.get_body_xvelp(name).copy()
     
-    def body_size(self, name):
-        ''' Get the size of a named body in the simulator world reference frame '''
-        return self.model.geom_size[self.model.geom_names.index(name)].copy()
+    # def body_size(self, name):
+    #     ''' Get the size of a named body in the simulator world reference frame '''
+    #     return self.model.geom_size[self.model.geom_names.index(name)].copy()
 
 
 
@@ -392,7 +395,7 @@ class Robot:
         # self.sim.forward()
 
         # Needed to figure out z-height of free joint of offset body
-        # self.z_height = self.mj_model.xpos('robot')[2]
+        self.z_height = self.mj_model.body('robot').pos[2]
         # Get a list of geoms in the robot
         # self.geom_names = [n for n in self.sim.model.geom_names if n != 'floor']
         # Needed to figure out the observation spaces

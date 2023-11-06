@@ -21,6 +21,7 @@ from copy import deepcopy
 from safe_rl_envs.envs.world import World, Robot
 import os
 import safe_rl_envs
+from functools import partial
 
 # Default location to look for /xmls folder:
 BASE_DIR = os.path.dirname(safe_rl_envs.__file__)
@@ -63,7 +64,7 @@ GROUP_GHOST3D = 3
 GROUP_ROBBER = 5
 GROUP_ROBBER3D = 5
 
-
+JOINT_SIZE = [7,4,1,1]
 
 # Constant for origin of world
 ORIGIN_COORDINATES = np.zeros(3)
@@ -95,8 +96,22 @@ class Engine(gym.Env, gym.utils.EzPickle):
 
         # Default configuration (this should not be nested since it gets copied)
     DEFAULT = {
+        'num_steps': 1000,  # Maximum number of environment steps in an episode
         'device_id': 0,
         'num_envs': 1, # Number of the batched environment
+        
+        'placements_extents': [-2, -2, 2, 2],  # Placement limits (min X, min Y, max X, max Y)
+        'placements_margin': 0.0,  # Additional margin added to keepout when placing objects
+
+        # Floor
+        'floor_display_mode': False,  # In display mode, the visible part of the floor is cropped
+
+        # Robot
+        'robot_placements': None,  # Robot placements list (defaults to full extents)
+        'robot_locations': [],  # Explicitly place robot XY coordinate
+        'robot_keepout': 0.4,  # Needs to be set to match the robot XML used
+        'robot_base': 'xmls/point.xml',  # Which robot XML to use as the base
+        'robot_rot': None,  # Override robot starting angle
         
         # Observation flags - some of these require other flags to be on
         # By default, only robot sensor observations are enabled.
@@ -111,6 +126,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         'observe_vel': False,  # Observe the vel of the robot
         'observe_acc': False,  # Observe the acc of the robot
         'observe_ctrl': True,  # Observe the previous action
+        'observe_vision': False,  # Observe vision from the robot
 
         # Render options
         'render_labels': False,
@@ -139,8 +155,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
         # Goal parameters
         'goal_placements': None,  # Placements where goal may appear (defaults to full extents)
         'goal_locations': [],  # Fixed locations to override placements
-        'goal_keepout': 0.4,  # Keepout radius when placing goals
-        'goal_size': 0.3,  # Radius of the goal area (if using task 'goal')
+        'goal_keepout': 0.5,  # Keepout radius when placing goals
+        'goal_size': 0.5,  # Radius of the goal area (if using task 'goal')
         'goal_3D': False,
         'goal_z_range': [1.0, 1.0],  # range of z pos of goal, only for 3D goal
 
@@ -168,10 +184,10 @@ class Engine(gym.Env, gym.utils.EzPickle):
         'constrain_indicator': True,  # If true, all costs are either 1 or 0 for a given step.
 
         # Hazardous areas
-        'hazards_num': 0,  # Number of hazards in an environment
+        'hazards_num': 6,  # Number of hazards in an environment
         'hazards_placements': None,  # Placements list for hazards (defaults to full extents)
         'hazards_locations': [],  # Fixed locations to override placements
-        'hazards_keepout': 0.4,  # Radius of hazard keepout for placement
+        'hazards_keepout': 0.45,  # Radius of hazard keepout for placement
         'hazards_size': 0.3,  # Radius of hazards
         'hazards_cost': 1.0,  # Cost (per step) for violating the constraint
 
@@ -187,22 +203,29 @@ class Engine(gym.Env, gym.utils.EzPickle):
         # can't find it anywhere else, it's probably set via the config dict
         # and this parse function.
         self.parse(config)
-        self.body_name2id = {}
-        
-        self.seed()
+        self.body_name2xpos_id = {}
+        self.key = jax.random.PRNGKey(self._seed) 
+
         # path = 'xmls/barkour_v0/assets/barkour.xml'
-        path = 'xmls/point.xml'
-        self.robot = Robot(path)
+        path = 'xmls/ant.xml'
+        self.robot = Robot(self.robot_base)
         base_path = os.path.join(BASE_DIR, path)
-        self.mj_model = mujoco.MjModel.from_xml_path(base_path) # Load Mujoco model from xml
+        self.world_config_dict = self.build_world_config()
+        self.world = World(self.world_config_dict)
+        self.world.build()
+        
+        # self.mj_model = mujoco.MjModel.from_xml_path(base_path) # Load Mujoco model from xml
+        self.mj_model = self.world.model
+        self.mj_model = mujoco.MjModel.from_xml_string(self.world.xml_string)
         self.mj_data = mujoco.MjData(self.mj_model) # Genearte Mujoco data from Mujoco model
+        
         self.mjx_model = device_put(self.mj_model, self.device_id) # Convert Mujoco model to MJX model for device acceleration
         self.mjx_data = device_put(self.mj_data, self.device_id) # Convert Mujoco data to MJX data for device acceleration
         
         
         self.dt = self.mj_model.opt.timestep * self.physics_steps_per_control_step
         print(self.dt)
-        self.key = jax.random.PRNGKey(0) # Number of the batched environment
+        # Number of the batched environment
         
         #----------------------------------------------------------------
         # define functions
@@ -212,10 +235,10 @@ class Engine(gym.Env, gym.utils.EzPickle):
         #----------------------------------------------------------------
         
         # Use jax.vmap to warp single environment reset to batched reset function
-        def batched_reset(rng: jax.Array):
+        def batched_reset(rng: jax.Array, layout_valid):
             if self.num_envs is not None:
                 rng = jax.random.split(rng, self.num_envs)
-            return jax.vmap(self.mjx_reset)(rng)
+            return jax.vmap(self.mjx_reset)(rng, layout_valid)
         
         # Use jax.vmap to warp single environment step to batched step function
         def batched_step(data: mjx.Data, last_data: mjx.Data, last_last_data: mjx.Data, last_done: jax.Array, last_last_done: jax.Array, action: jax.Array):
@@ -224,10 +247,17 @@ class Engine(gym.Env, gym.utils.EzPickle):
         def batched_reset_done(data: mjx.Data,
                                done: jax.Array, 
                                obs: jax.Array,
+                               layout,
                                rng: jax.Array):
             if self.num_envs is not None:
                 rng = jax.random.split(rng, self.num_envs)
-            return jax.vmap(self.mjx_reset_done)(data, done, obs, rng)
+            return jax.vmap(self.mjx_reset_done)(data, done, obs, layout, rng)
+        
+        # Use jax.vmap to warp single environment reset to batched reset function
+        def batched_sample_layout(rng: jax.Array):
+            if self.num_envs is not None:
+                rng = jax.random.split(rng, int(1e6))
+            return jax.vmap(self.sample_layout)(rng)
     
         #----------------------------------------------------------------
         # define batch operation interfaces
@@ -235,6 +265,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self._reset = jax.jit(batched_reset) # Use Just In Time (JIT) compilation to execute batched reset efficiently
         self._step = jax.jit(batched_step) # Use Just In Time (JIT) compilation to execute batched step efficiently
         self._reset_done = jax.jit(batched_reset_done)
+        self._sample_layout = jax.jit(batched_sample_layout)
         
         
         #----------------------------------------------------------------
@@ -247,7 +278,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self._last_done = None
         self._last_last_done = None
         self.viewer = None
-        self.hazards_placements = [-2,2]
+        # self.hazards_placements = [-2,2]
         
         
         #----------------------------------------------------------------
@@ -260,14 +291,22 @@ class Engine(gym.Env, gym.utils.EzPickle):
         # self.action_space = utils.batch_space(action_space, self.num_envs)
         self._done = None
         self.build_observation_space()
-        self.body_name2id = {}
-        self.body_name2id['floor'] = self.mj_model.geom('floor').id
-        self.body_name2id['robot'] = self.mj_model.geom('robot').id
-        self.body_name2id['goal'] = self.mj_model.geom('goal').id
-        self.body_name2id['hazards'] = []
-        for i in range(self.mj_model.ngeom):
-            if 'hazard' in self.mj_model.geom(i).name:
-                self.body_name2id['hazards'].append(i)
+        self.build_placements_dict()
+        self.body_name2xpos_id = {}
+        self.body_name2xpos_id['robot'] = self.mj_model.body('robot').id
+        self.body_name2xpos_id['goal'] = self.mj_model.body('goal').id
+        self.body_name2xpos_id['hazards'] = []
+        for i in range(self.mj_model.nbody):
+            if 'hazard' in self.mj_model.body(i).name:
+                self.body_name2xpos_id['hazards'].append(i)
+
+        self.joint_name2qpos_id = {}
+        idx = 0
+        for i in range(self.mj_model.njnt):
+            name = self.mj_model.jnt(i).name
+            type = self.mj_model.jnt(i).type[0]
+            self.joint_name2qpos_id[name] = idx
+            idx += JOINT_SIZE[type]
 
     #----------------------------------------------------------------
     # environment configuration functions
@@ -281,12 +320,68 @@ class Engine(gym.Env, gym.utils.EzPickle):
             assert key in self.DEFAULT, f'Bad key {key}'
             setattr(self, key, value)
 
+    def random_rot(self):
+        ''' Use internal random state to get a random rotation in radians '''
+        # return float(jax.random.uniform(self.key, minval=0, maxval=2 * jp.pi))
+        return 0.0
+
+    def build_world_config(self):
+        ''' Create a world_config from our own config '''
+        # TODO: parse into only the pieces we want/need
+        world_config = {}
+
+        world_config['robot_base'] = self.robot_base
+        world_config['robot_xy'] = [0.0, 0.0]
+        if self.robot_rot is None:
+            world_config['robot_rot'] = self.random_rot()
+        else:
+            world_config['robot_rot'] = float(self.robot_rot)
+
+        if self.floor_display_mode:
+            floor_size = max(self.placements_extents)
+            world_config['floor_size'] = [floor_size + .1, floor_size + .1, 1]
+
+        #if not self.observe_vision:
+        #    world_config['render_context'] = -1  # Hijack this so we don't create context
+        world_config['observe_vision'] = self.observe_vision
+        # Extra objects to add to the scene
+        world_config['objects'] = {}
+        # Extra geoms (immovable objects) to add to the scene
+        world_config['geoms'] = {}
+        if self.task in ['goal', 'push']:
+            goal_pos = np.r_[0.0, 0.0, 0.0]
+            geom = {'name': 'goal',
+                'size': [self.goal_size],
+                'pos': goal_pos,
+                'rot': self.random_rot(),
+                'type': 'sphere',
+                'contype': 0,
+                'conaffinity': 0,
+                'group': GROUP_GOAL,
+                'rgba': COLOR_GOAL* [1, 1, 1, 0.25]}  # transparent * [1, 1, 1, 0.25]
+            world_config['geoms']['goal'] = geom
+        if self.hazards_num:
+            for i in range(self.hazards_num):
+                name = f'hazard{i}'
+                geom = {'name': name,
+                        'size': [self.hazards_size, 1e-2],#self.hazards_size / 2],
+                        'pos': np.r_[0.0, 0.0, 2e-2],#self.hazards_size / 2 + 1e-2],
+                        'rot': self.random_rot(),
+                        'type': 'cylinder',
+                        'contype': 0,
+                        'conaffinity': 0,
+                        'group': GROUP_HAZARD,
+                        'rgba': COLOR_HAZARD * [1, 1, 1, 0.25]} #0.1]}  # transparent
+                world_config['geoms'][name] = geom
+
+            return world_config
+
     def build_observation_space(self):
         ''' Construct observtion space.  Happens only once at during __init__ '''
         obs_space_dict = OrderedDict()  # See self.obs()
-        self.robot.nq = 2
-        self.robot.nv = 2
-        self.robot.nu = 2
+        # self.robot.nq = 2
+        # self.robot.nv = 2
+        # self.robot.nu = 2
         if self.observe_goal_lidar:
             obs_space_dict['goal_lidar'] = gym.spaces.Box(0.0, 1.0, (self.lidar_num_bins,), dtype=np.float32)
         if self.observe_goal_comp:
@@ -315,8 +410,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
                 self.obs_space_dict[k] = utils.batch_space(v, self.num_envs)
             self.observation_space = gym.spaces.Dict(obs_space_dict)
 
-    def seed(self):
-        self.key = jax.random.PRNGKey(self._seed)
+
 
     #----------------------------------------------------------------
     # gym wrapper functions
@@ -327,14 +421,41 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self._last_data = deepcopy(self._data)
         self._last_last_done = deepcopy(self._last_done)
         self._last_done = deepcopy(self._done)
+        self.key,_ = jax.random.split(self.key, 2)
+    
+    def reset_layout(self):
+        layout, success = self._sample_layout(self.key)
+        
+        idx = jp.where(success > 0.)[0]
+        self.layout = {}
+        for key in layout.keys():
+            self.layout[key] = layout[key][idx]
+            
+        self.layout
+        self.layout_size = len(idx)
+        print("number of valid layout is: ", self.layout_size)
+        assert self.layout_size > self.num_envs
+        
+    def get_layout(self):
+        idx = jax.random.randint(self.key, (self.num_envs,), minval=0, maxval=self.layout_size)
+        layout_valid = {}
+        for key in self.layout.keys():
+            layout_valid[key] = self.layout[key][idx]
+            
+        return layout_valid
     
     def reset(self):
         ''' Reset the physics simulation and return observation '''
-        obs, data = self._reset(self.key)
         
+        self.reset_layout()
+        layout = self.get_layout()
+        # import ipdb;ipdb.set_trace()
+        obs, data = self._reset(self.key, layout)
+        # import ipdb;ipdb.set_trace()
         # update the log
         self._obs = obs
         self._data = data
+        
         return jax_to_torch(obs)
     
     def step(self, action):
@@ -342,14 +463,17 @@ class Engine(gym.Env, gym.utils.EzPickle):
         # print(action)
         action = torch_to_jax(action)
         
-        self.key,_ = jax.random.split(self.key, 2)
+        
         self.update_data()
+        # import ipdb;ipdb.set_trace()
         obs, reward, done, info, data = self._step(self._data, 
                                                     self._last_data, 
                                                     self._last_last_data, 
                                                     self._last_done, 
                                                     self._last_last_done, 
                                                     action)
+        # import ipdb;ipdb.set_trace()
+        # assert self._data.xpos[1,14,0] == data.xpos[1,14,0]
         # update the current info right after step 
         self._data = data
         self._obs = obs
@@ -359,34 +483,171 @@ class Engine(gym.Env, gym.utils.EzPickle):
         return jax_to_torch(self._obs), jax_to_torch(self._reward), jax_to_torch(self._done), jax_to_torch(self._info)
     
     def reset_done(self):
+        # self.reset_layout()
+        layout = self.get_layout()
         obs, self._data = self._reset_done(self._data,
                                             self._done,
                                             self._obs,
+                                            layout,
                                             self.key)
         return jax_to_torch(obs)
     
-    def build_layout(self, rng):
-        ''' Rejection sample a placement of objects to find a layout. '''
-        # if not self.randomize_layout:
-        #     self.rs = np.random.RandomState(0)
-        rng, rng1, rng2 = jax.random.split(rng, 3)
+    # def build_layout(self, rng):
+    #     ''' Rejection sample a placement of objects to find a layout. '''
+    #     # if not self.randomize_layout:
+    #     #     self.rs = np.random.RandomState(0)
+    #     rng, rng1, rng2 = jax.random.split(rng, 3)
         
+    #     layout = {}
+    #     layout["hazards_pos"] = jax.random.uniform(rng1, (8,3), minval=self.hazards_placements[0], maxval=self.hazards_placements[1])
+    #     layout["goal_pos"] = jax.random.uniform(rng1, (1,3), minval=-2.0, maxval=2.0)
+    #     return layout  
+    def placements_dict_from_object(self, object_name):
+        ''' Get the placements dict subset just for a given object name '''
+        placements_dict = {}
+        if hasattr(self, object_name + 's_num'):  # Objects with multiplicity
+            plural_name = object_name + 's'
+            object_fmt = object_name + '{i}'
+            object_num = getattr(self, plural_name + '_num', None)
+            object_locations = getattr(self, plural_name + '_locations', [])
+            object_placements = getattr(self, plural_name + '_placements', None)
+            object_keepout = getattr(self, plural_name + '_keepout')
+        else:  # Unique objects
+            object_fmt = object_name
+            object_num = 1
+            object_locations = getattr(self, object_name + '_locations', [])
+            object_placements = getattr(self, object_name + '_placements', None)
+            object_keepout = getattr(self, object_name + '_keepout')
+        for i in range(object_num):
+            if i < len(object_locations):
+                x, y = object_locations[i]
+                k = object_keepout + 1e-9  # Epsilon to account for numerical issues
+                placements = [(x - k, y - k, x + k, y + k)]
+            else:
+                placements = object_placements
+            placements_dict[object_fmt.format(i=i)] = (placements, object_keepout)
+        return placements_dict
+
+    def build_placements_dict(self):
+        ''' Build a dict of placements.  Happens once during __init__. '''
+        # Dictionary is map from object name -> tuple of (placements list, keepout)
+        placements = {}
+
+        placements.update(self.placements_dict_from_object('robot'))
+
+        if self.task in ['goal']:
+            placements.update(self.placements_dict_from_object('goal'))
+        if self.hazards_num: #self.constrain_hazards:
+            placements.update(self.placements_dict_from_object('hazard'))
+
+        self.placements = placements
+
+    def sample_layout(self, rng):
+        ''' Sample a single layout, returning True if successful, else False. '''
+        
+        def placement_is_valid(xy, layout):
+            flag = 1.
+            for other_name, other_xy in layout.items():
+                other_keepout = self.placements[other_name][1]
+                dist = jp.sqrt(jp.sum(jp.square(xy - other_xy)))
+                flag = jp.where(dist < other_keepout + self.placements_margin + keepout, x=0., y=flag)
+                # if dist < other_keepout + self.placements_margin + keepout:
+                #     return False
+            return flag
+
         layout = {}
-        layout["hazards_pos"] = jax.random.uniform(rng1, (8,3), minval=self.hazards_placements[0], maxval=self.hazards_placements[1])
-        layout["goal_pos"] = jax.random.uniform(rng1, (1,3), minval=-2.0, maxval=2.0)
-        return layout  
+        success = 1
+        for name, (placements, keepout) in self.placements.items():
+            conflicted = 1.
+            xy = jp.array([-jp.inf, -jp.inf])
+            for _ in range(10):
+                rng, rng1 = jax.random.split(rng, 2)
+                cur_xy = self.draw_placement(placements, keepout, rng1)
+                flag = placement_is_valid(cur_xy, layout)
+                xy = jp.where(flag > 0., x=cur_xy, y=xy)
+                conflicted = jp.where(flag > 0., x=0., y=conflicted)
+            layout[name] = xy
+            success = jp.where(conflicted > 0., x=0., y=success) 
+        return layout, success
+
+    def constrain_placement(self, placement, keepout):
+        ''' Helper function to constrain a single placement by the keepout radius '''
+        xmin, ymin, xmax, ymax = placement
+        return (xmin + keepout, ymin + keepout, xmax - keepout, ymax - keepout)
  
+    def draw_placement(self, placements, keepout, rng):
+        ''' 
+        Sample an (x,y) location, based on potential placement areas.
+
+        Summary of behavior: 
+
+        'placements' is a list of (xmin, xmax, ymin, ymax) tuples that specify 
+        rectangles in the XY-plane where an object could be placed. 
+
+        'keepout' describes how much space an object is required to have
+        around it, where that keepout space overlaps with the placement rectangle.
+
+        To sample an (x,y) pair, first randomly select which placement rectangle
+        to sample from, where the probability of a rectangle is weighted by its
+        area. If the rectangles are disjoint, there's an equal chance the (x,y) 
+        location will wind up anywhere in the placement space. If they overlap, then
+        overlap areas are double-counted and will have higher density. This allows
+        the user some flexibility in building placement distributions. Finally, 
+        randomly draw a uniform point within the selected rectangle.
+
+        '''
+        if placements is None:
+            choice = self.constrain_placement(self.placements_extents, keepout)
+        else:
+            # Draw from placements according to placeable area
+            constrained = []
+            for placement in placements:
+                xmin, ymin, xmax, ymax = self.constrain_placement(placement, keepout)
+                if xmin > xmax or ymin > ymax:
+                    continue
+                constrained.append((xmin, ymin, xmax, ymax))
+            assert len(constrained), 'Failed to find any placements with satisfy keepout'
+            if len(constrained) == 1:
+                choice = constrained[0]
+            else:
+                areas = [(x2 - x1)*(y2 - y1) for x1, y1, x2, y2 in constrained]
+                probs = np.array(areas) / np.sum(areas)
+                choice = constrained[self.rs.choice(len(constrained), p=probs)]
+        xmin, ymin, xmax, ymax = choice
+        rng1, rng2 = jax.random.split(rng, 2)
+        x_rand = jax.random.uniform(rng1, minval=xmin, maxval=xmax)
+        y_rand = jax.random.uniform(rng2, minval=ymin, maxval=ymax)
+        return jp.array([x_rand, y_rand])
+
+    def layout2qpos(self, layout):
+        qpos_reset = jp.zeros(self.mjx_model.nq)
+        for key in self.placements.keys():
+            if key == 'robot' and key in self.joint_name2qpos_id.keys():
+                x_idx = self.joint_name2qpos_id['robot']
+                y_idx = self.joint_name2qpos_id['robot'] + 1
+                qpos_reset = qpos_reset.at[x_idx].set(layout[key][0])
+                qpos_reset = qpos_reset.at[y_idx].set(layout[key][1])
+                qpos_reset = qpos_reset.at[x_idx + 3].set(1.0)
+            else:
+                x_idx = self.joint_name2qpos_id[key + '_x']
+                y_idx = self.joint_name2qpos_id[key + '_y']
+                qpos_reset = qpos_reset.at[x_idx].set(layout[key][0])
+                qpos_reset = qpos_reset.at[y_idx].set(layout[key][1])
+            # import ipdb;ipdb.set_trace()
+        return qpos_reset
     #----------------------------------------------------------------
     # jax parallel wrapper functions
     #----------------------------------------------------------------
 
-    def mjx_reset(self, rng):
+    def mjx_reset(self, rng, layout):
         """ Resets an unbatched environment to an initial state."""
         #! TODO: update qpose with layout
-        layout = self.build_layout(rng)
-        qpos_new = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1, maxval=1)
+        # layout = self.build_layout(rng)
+        # qpos_reset = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1.5, maxval=1.5)
+        # import ipdb;ipdb.set_trace()
+        qpos_reset = self.layout2qpos(layout)
         data = self.mjx_data
-        data = data.replace(qpos=qpos_new, qvel=jp.zeros(self.mjx_model.nv), ctrl=jp.zeros(self.mjx_model.nu))
+        data = data.replace(qpos=qpos_reset, qvel=jp.zeros(self.mjx_model.nv), ctrl=jp.zeros(self.mjx_model.nu))
         
         # log the last data
         data = mjx.forward(self.mjx_model, data)
@@ -401,11 +662,11 @@ class Engine(gym.Env, gym.utils.EzPickle):
                  action: jp.ndarray):
         """Runs one timestep of the environment's dynamics."""
         def f(data, _):   
-            data = data.replace(ctrl=action)
             return (
                 mjx.step(self.mjx_model, data),
                 None,
             )
+        data = data.replace(ctrl=action)
         data, _ = jax.lax.scan(f, data, (), self.physics_steps_per_control_step)
         obs, obs_dict = self.obs(data, last_data, last_last_data, last_done, last_last_done)
         reward, done = self.reward_done(data, last_data, last_done)
@@ -418,29 +679,33 @@ class Engine(gym.Env, gym.utils.EzPickle):
     def mjx_reset_done(self,
                         data: mjx.Data, 
                         done: jp.ndarray,
-                        current_obs: jp.ndarray,
+                        obs: jp.ndarray,
+                        layout,
                         rng):
         """Runs one timestep of the environment's dynamics."""
-        def f(data, _): 
-            return (
-                mjx.step(self.mjx_model, data),
-                None,
-            )
-        qpos_reset = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1.5, maxval=1.5)
+        # qpos_reset = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1.5, maxval=1.5)
+        # import ipdb;ipdb.set_trace()
+        qpos_reset = self.layout2qpos(layout)
         ctrl_reset = jp.zeros(self.mjx_model.nu)
         qvel_reset = jp.zeros(self.mjx_model.nv)
-            
-        # fake one step forward to get xpos/observation for new initialized jpos
-        qpos = jp.where(done > 0.0, x = qpos_reset, y = data.qpos)
-        ctrl = jp.where(done > 0.0, x = ctrl_reset, y = data.ctrl)
-        qvel = jp.where(done > 0.0, x = qvel_reset, y = data.qvel)
-        data = data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
-        data_reset, _ = jax.lax.scan(f, data, (), self.physics_steps_per_control_step)
-        # reset observation treats last done and last last done all true, just use current data 
-        obs_reset, _ = self.obs(data_reset, None, None, None, None)
+        if done is not None:
+            # fake one step forward to get xpos/observation for new initialized jpos
+            qpos = jp.where(done > 0.0, x = qpos_reset, y = data.qpos)
+            ctrl = jp.where(done > 0.0, x = ctrl_reset, y = data.ctrl)
+            qvel = jp.where(done > 0.0, x = qvel_reset, y = data.qvel)
+            data = data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
+            # data_reset = self.one_step(data)
+            def f(data, _):   
+                return (
+                        mjx.step(self.mjx_model, data),
+                        None,
+                )
+            data_reset, _ = jax.lax.scan(f, data, (), self.physics_steps_per_control_step)
+            # reset observation treats last done and last last done all true, just use current data 
+            obs_reset, _ = self.obs(data_reset, None, None, None, None)
 
-        # reset observation for done environment 
-        obs = jp.where(done > 0., x=obs_reset, y=current_obs)
+            # reset observation for done environment 
+            obs = jp.where(done > 0., x=obs_reset, y=obs)
         
         return obs, data
 
@@ -465,11 +730,11 @@ class Engine(gym.Env, gym.utils.EzPickle):
         vel, acc = self.ego_vel_acc(data, last_data, last_last_data, last_done, last_last_done)
         
         if self.observe_goal_lidar:
-            obs['goal_lidar'] = self.obs_lidar(data, data.xpos[self.body_name2id['goal'],:])
+            obs['goal_lidar'] = self.obs_lidar(data, data.xpos[self.body_name2xpos_id['goal'],:])
         if self.observe_hazards:
-            obs['hazards_lidar'] = self.obs_lidar(data, data.xpos[self.body_name2id['hazards'],:])
+            obs['hazards_lidar'] = self.obs_lidar(data, data.xpos[self.body_name2xpos_id['hazards'],:])
         if self.observe_goal_comp:
-            obs['goal_compass'] = self.obs_compass(data, data.xpos[self.body_name2id['goal'],:])
+            obs['goal_compass'] = self.obs_compass(data, data.xpos[self.body_name2xpos_id['goal'],:])
         if self.observe_qpos:
             obs['qpos'] = data.qpos[:self.robot.nq]
         if self.observe_qvel:
@@ -493,8 +758,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
 
     def goal_pos(self, data: mjx.Data) -> jp.ndarray:
             xpos = data.xpos.reshape(-1,3)
-            robot_pos = xpos[self.body_name2id['robot'],:]
-            goal_pos = xpos[self.body_name2id['goal'],:]
+            robot_pos = xpos[self.body_name2xpos_id['robot'],:]
+            goal_pos = xpos[self.body_name2xpos_id['goal'],:]
             dist_goal = jp.sqrt(jp.sum(jp.square(goal_pos[:2] - robot_pos[:2]))) 
             return dist_goal
 
@@ -513,8 +778,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
     
     def cost(self, data: mjx.Data) -> jp.ndarray:
         # get the raw position data of different objects current frame 
-        robot_pos = data.xpos[self.body_name2id['robot'],:].reshape(-1,3)
-        hazards_pos = data.xpos[self.body_name2id['hazards'],:].reshape(-1,3)
+        robot_pos = data.xpos[self.body_name2xpos_id['robot'],:].reshape(-1,3)
+        hazards_pos = data.xpos[self.body_name2xpos_id['hazards'],:].reshape(-1,3)
         dist_robot2hazard = jp.linalg.norm(hazards_pos[:,:2] - robot_pos[:,:2], axis=1)
         dist_robot2hazard_below_threshold = jp.minimum(dist_robot2hazard, self.hazards_size)
         cost = jp.sum(self.hazards_size*jp.ones(dist_robot2hazard_below_threshold.shape) - dist_robot2hazard_below_threshold)
@@ -527,8 +792,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
     def ego_xy(self, pos, data):
         xpos = data.xpos.reshape(-1,3)
         xmat = data.xmat.reshape(-1,3,3)
-        robot_pos = xpos[self.body_name2id['robot'],:]
-        robot_mat = xmat[self.body_name2id['robot'],:]
+        robot_pos = xpos[self.body_name2xpos_id['robot'],:]
+        robot_mat = xmat[self.body_name2xpos_id['robot'],:]
         ''' Return the egocentric XY vector to a position from the robot '''
         assert pos.shape == (2,), f'Bad pos {pos}'
         pos_3vec = jp.concatenate([pos, jp.array([0])]) # Add a zero z-coordinate
@@ -544,8 +809,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
     def obs_compass(self, data, pos):
         xpos = data.xpos.reshape(-1,3)
         xmat = data.xmat.reshape(-1,3,3)
-        robot_pos = xpos[self.body_name2id['robot'],:]
-        robot_mat = xmat[self.body_name2id['robot'],:]
+        robot_pos = xpos[self.body_name2xpos_id['robot'],:]
+        robot_mat = xmat[self.body_name2xpos_id['robot'],:]
         ''' Return the egocentric XY vector to a position from the robot '''
         if pos.shape == (3,):
             pos = pos[:2]
@@ -611,16 +876,16 @@ class Engine(gym.Env, gym.utils.EzPickle):
     
     def ego_vel_acc(self, data, last_data, last_last_data, last_done, last_last_done):
         '''velocity and acceleration in the robot frame '''
-        robot_pos = data.xpos[self.body_name2id['robot'],:]
-        robot_mat = data.xmat[self.body_name2id['robot'],:,:]
+        robot_pos = data.xpos[self.body_name2xpos_id['robot'],:]
+        robot_mat = data.xmat[self.body_name2xpos_id['robot'],:,:]
 
         # auto update past robot poses for auto reset  
         robot_pos_last = robot_pos
         robot_pos_last_last = robot_pos
         if last_done is not None:
-            robot_pos_last = jp.where(last_done > 0.0, x = robot_pos, y = last_data.xpos[self.body_name2id['robot'],:])
+            robot_pos_last = jp.where(last_done > 0.0, x = robot_pos, y = last_data.xpos[self.body_name2xpos_id['robot'],:])
             if last_last_done is not None:
-                robot_pos_last_last = jp.where(last_last_done + last_done > 0.0, x = robot_pos_last, y = last_last_data.xpos[self.body_name2id['robot'],:])
+                robot_pos_last_last = jp.where(last_last_done + last_done > 0.0, x = robot_pos_last, y = last_last_data.xpos[self.body_name2xpos_id['robot'],:])
         # current velocity
         pos_diff_vec_world_frame = robot_pos - robot_pos_last
         vel_vec_world_frame = pos_diff_vec_world_frame / self.dt
@@ -641,9 +906,6 @@ class Engine(gym.Env, gym.utils.EzPickle):
     #----------------------------------------------------------------
     # Render functions
     #----------------------------------------------------------------
-    
-    def render_sphere(self, pos, size, color, label='', alpha=0.1):
-        pass
 
     def viewer_setup(self):
         # self.viewer.cam.trackbodyid = 0         # id of the body to track ()
@@ -659,8 +921,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
     def render_lidar(self, data: mjx.Data, lidar, color, offset):
         xpos = data.xpos.reshape(-1,3)
         xmat = data.xmat.reshape(-1,3,3)
-        robot_pos = xpos[self.body_name2id['robot'],:]
-        robot_mat = xmat[self.body_name2id['robot'],:]
+        robot_pos = xpos[self.body_name2xpos_id['robot'],:]
+        robot_mat = xmat[self.body_name2xpos_id['robot'],:]
         lidar = lidar.flatten()
         cnt = 0
         for i, sensor in enumerate(lidar):
@@ -670,49 +932,78 @@ class Engine(gym.Env, gym.utils.EzPickle):
             binpos = np.array([np.cos(theta) * rad, np.sin(theta) * rad, offset])
             pos = robot_pos + np.matmul(binpos, robot_mat.transpose())
             alpha = min(1.0, sensor + .1)
-            mujoco.mjv_initGeom(
-                self.viewer.user_scn.geoms[i + self.viewer.user_scn.ngeom],
-                type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                size=[0.02, 0, 0],
-                pos=pos.flatten(),
-                mat=np.eye(3).flatten(),
-                rgba=np.array(color) * alpha
-                )
-            mujoco.mjv_initGeom(
-                self.renderer_scene.geoms[i + self.renderer_scene.ngeom],
-                type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                size=[0.02, 0, 0],
-                pos=pos.flatten(),
-                mat=np.eye(3).flatten(),
-                rgba=np.array(color) * alpha
-                )
-            cnt += 1
-        self.viewer.user_scn.ngeom += cnt
-        self.renderer_scene.ngeom += cnt
+            size=[0.02, 0, 0]
+            self.render_sphere(pos, size, color, alpha)
+        #     mujoco.mjv_initGeom(
+        #         self.viewer.user_scn.geoms[i + self.viewer.user_scn.ngeom],
+        #         type=mujoco.mjtGeom.mjGEOM_SPHERE,
+        #         size=[0.02, 0, 0],
+        #         pos=pos.flatten(),
+        #         mat=np.eye(3).flatten(),
+        #         rgba=np.array(color) * alpha
+        #         )
+        #     mujoco.mjv_initGeom(
+        #         self.renderer_scene.geoms[i + self.renderer_scene.ngeom],
+        #         type=mujoco.mjtGeom.mjGEOM_SPHERE,
+        #         size=[0.02, 0, 0],
+        #         pos=pos.flatten(),
+        #         mat=np.eye(3).flatten(),
+        #         rgba=np.array(color) * alpha
+        #         )
+        #     cnt += 1
+        # self.viewer.user_scn.ngeom += cnt
+        # self.renderer_scene.ngeom += cnt
     
     def render_compass(self, data: mjx.Data, compass_pos, color, offset):
         xpos = data.xpos.reshape(-1,3)
         xmat = data.xmat.reshape(-1,3,3)
-        robot_pos = xpos[self.body_name2id['robot'],:]
-        robot_mat = xmat[self.body_name2id['robot'],:]
+        robot_pos = xpos[self.body_name2xpos_id['robot'],:]
+        robot_mat = xmat[self.body_name2xpos_id['robot'],:]
         compass_pos = compass_pos.flatten()
         compass_pos = jp.concatenate([compass_pos * 0.15, jp.array([0])])
         pos = robot_pos + np.matmul(compass_pos, robot_mat.transpose())
+        # mujoco.mjv_initGeom(
+        #     self.viewer.user_scn.geoms[self.viewer.user_scn.ngeom],
+        #     type=mujoco.mjtGeom.mjGEOM_SPHERE,
+        #     size=[0.02, 0, 0],
+        #     pos=pos.flatten(),
+        #     mat=np.eye(3).flatten(),
+        #     rgba=np.array(color) * 0.5
+        #     )
+        # mujoco.mjv_initGeom(
+        #     self.renderer_scene.geoms[self.renderer_scene.ngeom],
+        #     type=mujoco.mjtGeom.mjGEOM_SPHERE,
+        #     size=[0.02, 0, 0],
+        #     pos=pos.flatten(),
+        #     mat=np.eye(3).flatten(),
+        #     rgba=np.array(color) * 0.5
+        #     )
+        # self.viewer.user_scn.ngeom += 1
+        # self.renderer_scene.ngeom += 1
+        size=[0.05, 0, 0]
+        alpha = 0.5
+        self.render_sphere(pos, size, color, alpha)
+
+    def render_sphere(self, pos, size, color, alpha=0.1):
+        ''' Render a radial area in the environment '''
+        pos = np.asarray(pos)
+        if pos.shape == (2,):
+            pos = np.r_[pos, 0]  # Z coordinate 0
         mujoco.mjv_initGeom(
             self.viewer.user_scn.geoms[self.viewer.user_scn.ngeom],
             type=mujoco.mjtGeom.mjGEOM_SPHERE,
-            size=[0.02, 0, 0],
+            size=size * np.ones(3),
             pos=pos.flatten(),
             mat=np.eye(3).flatten(),
-            rgba=np.array(color) * 0.5
+            rgba=np.array(color) * alpha,
             )
         mujoco.mjv_initGeom(
             self.renderer_scene.geoms[self.renderer_scene.ngeom],
             type=mujoco.mjtGeom.mjGEOM_SPHERE,
-            size=[0.02, 0, 0],
+            size=size * np.ones(3),
             pos=pos.flatten(),
             mat=np.eye(3).flatten(),
-            rgba=np.array(color) * 0.5
+            rgba=np.array(color) * alpha,
             )
         self.viewer.user_scn.ngeom += 1
         self.renderer_scene.ngeom += 1
@@ -729,17 +1020,26 @@ class Engine(gym.Env, gym.utils.EzPickle):
             self.viewer_setup()
             # self.renderer_setup()
         # print(data.xpos[1])
-        
+        robot_pos = data.xpos[self.body_name2xpos_id['robot'],:].reshape(-1,3)
         mujoco.mj_step(self.mj_model, data)
         self.renderer.update_scene(data, self.viewer.cam, self.viewer.opt)
         self.renderer_scene = self.renderer._scene
         offset = 0.5
         self.viewer.user_scn.ngeom = 0
-        obs = self._obs
-        # self.render_lidar(self._data, obs['hazards_lidar'], COLOR_HAZARD, offset)
-        # offset += 0.1
-        # self.render_lidar(self._data, obs['goal_lidar'], COLOR_GOAL, offset)
-        # self.render_compass(self._data, obs['goal_compass'], COLOR_GOAL, offset)
+        obs = self._info['obs']
+        cost = self._info['cost']
+        if cost > 0:
+            self.render_sphere(robot_pos, 0.5, COLOR_RED, alpha=.5)
+        # if self.observe_hazards:
+        #     self.render_lidar(self._data, obs['hazards_lidar'], COLOR_HAZARD, offset)
+        #     offset += 0.1
+        # if self.observe_goal_lidar:
+        #     self.render_lidar(self._data, obs['goal_lidar'], COLOR_GOAL, offset)
+        #     offset += 0.1
+        # if self.observe_goal_comp:
+        #     self.render_compass(self._data, obs['goal_compass'], COLOR_GOAL, offset)
+        #     offset += 0.1
+        
         self.viewer.sync()
         
         return self.renderer.render()
