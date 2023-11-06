@@ -90,7 +90,12 @@ class CPOBufferX:
         if np.all(self.path_start_idx == 0) and np.all(self.ptr == self.max_ep_len):
             # simplest case, all enviroment is done at end batch episode, 
             # proceed with batch operation
+            if len(last_val.shape) == 1:
+                last_val = last_val.unsqueeze(1)
             assert last_val.shape == (self.env_num, 1)
+            if len(last_cost_val.shape) == 1:
+                last_cost_val = last_cost_val.unsqueeze(1)
+            assert last_cost_val.shape == (self.env_num, 1)
             rews = torch.hstack((self.rew_buf, last_val))
             vals = torch.hstack((self.val_buf, last_val))
             costs = torch.hstack((self.cost_buf, last_cost_val))
@@ -586,6 +591,8 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
     cum_cost = 0 
     
+    max_ep_len_ret = np.zeros(env_num)
+    
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for t in range(max_ep_len):
@@ -597,6 +604,7 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # Track cumulative cost over training
             cum_cost += info['cost'].cpu().numpy().squeeze().sum()
             ep_ret += r.cpu().numpy().squeeze()
+            max_ep_len_ret += r.cpu().numpy().squeeze()
             ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t)
             ep_len += 1
             
@@ -623,10 +631,12 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                                  EpLen=ep_len[np.where(ep_len == max_ep_len)],
                                  EpCostRet=ep_cost_ret[np.where(ep_len == max_ep_len)],
                                  EpCost=ep_cost[np.where(ep_len == max_ep_len)])
+                    logger.store(MaxEpLenRet=max_ep_len_ret)
                     buf.finish_path(v, vc, done)
                     # reset environment 
                     o = env.reset()
                     ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
+                    max_ep_len_ret = np.zeros(env_num)
                 else:
                     # trajectory finished for some environment
                     done = d.cpu().numpy() # finish path for certain environments
@@ -644,6 +654,9 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                             np.zeros(np.where(done == 1)[0].shape[0])
                     
                     buf.finish_path(v, vc, done)
+                       
+                    # only reset observations for those done environments 
+                    o = env.reset_done()
 
         # Save model
         if ((epoch % save_freq == 0) or (epoch == epochs-1)) and model_save:
@@ -660,13 +673,14 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
-        logger.log_tabular('EpRet', with_min_and_max=True)
+        logger.log_tabular('EpRet', average_only=True)
+        logger.log_tabular('MaxEpLenRet', average_only=True)
+        logger.log_tabular('EpCostRet', average_only=True)
+        logger.log_tabular('EpCost', average_only=True)
         logger.log_tabular('EpLen', average_only=True)
-        logger.log_tabular('EpCostRet', with_min_and_max=True)
-        logger.log_tabular('EpCost', with_min_and_max=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
         logger.log_tabular('CostRate', cost_rate)
-        logger.log_tabular('VVals', with_min_and_max=True)
+        logger.log_tabular('VVals', average_only=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*local_steps_per_epoch)
         logger.log_tabular('LossPi', average_only=True)
         logger.log_tabular('LossV', average_only=True)
@@ -681,7 +695,10 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 def create_env(args):
     # env =  safe_rl_envs_Engine(configuration(args.task))
     #! TODO: make engine configurable
-    config = {'num_envs':args.env_num}
+    config = {
+        'num_envs':args.env_num,
+        '_seed':args.seed,
+        }
     env = safe_rl_envs_Engine(config)
     return env
 

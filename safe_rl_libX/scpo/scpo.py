@@ -91,7 +91,12 @@ class SCPOBufferX:
         if np.all(self.path_start_idx == 0) and np.all(self.ptr == self.max_ep_len):
             # simplest case, all enviroment is done at end batch episode, 
             # proceed with batch operation
+            if len(last_val.shape) == 1:
+                last_val = last_val.unsqueeze(1)
             assert last_val.shape == (self.env_num, 1)
+            if len(last_cost_val.shape) == 1:
+                last_cost_val = last_cost_val.unsqueeze(1)
+            assert last_cost_val.shape == (self.env_num, 1)
             rews = torch.hstack((self.rew_buf, last_val))
             vals = torch.hstack((self.val_buf, last_val))
             costs = torch.hstack((self.cost_buf, last_cost_val))
@@ -628,6 +633,8 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
     cum_cost = 0 
     
+    max_ep_len_ret = np.zeros(env_num)
+    
     M = torch.zeros(env_num, 1, dtype=torch.float32).to(device) # initialize the current maximum cost
     o_aug = torch.cat((o, M), axis=1) # augmented observation = observation + M 
     first_step = np.ones(env_num) # flag for the first step of each episode
@@ -652,7 +659,8 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # Track cumulative cost over training
             cum_cost += info['cost'].cpu().numpy().squeeze().sum()
             ep_ret += r.cpu().numpy().squeeze()
-            ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t)
+            max_ep_len_ret += r.cpu().numpy().squeeze()
+            ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t) # useless metrics for scpo
             ep_len += 1
             
             assert ep_cost.shape == info['cost'].cpu().numpy().squeeze().shape
@@ -681,10 +689,12 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                                  EpCostRet=ep_cost_ret[np.where(ep_len == max_ep_len)],
                                  EpCost=ep_cost[np.where(ep_len == max_ep_len)],
                                  EpMaxCost=M.cpu().numpy()[np.where(ep_len == max_ep_len)])
+                    logger.store(MaxEpLenRet=max_ep_len_ret)
                     buf.finish_path(v, vc, done)
                     # reset environment 
                     o = env.reset()
                     ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
+                    max_ep_len_ret = np.zeros(env_num)
                     M = torch.zeros(env_num, 1, dtype=torch.float32).to(device) # initialize the current maximum cost
                     o_aug = torch.cat((o, M.view(-1,1)), axis=1) # augmented observation = observation + M 
                     first_step = np.ones(env_num)
@@ -709,8 +719,6 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     M[np.where(done == 1)] = torch.zeros((len(np.where(done==1)))).to(device)
                     o_aug[np.where(done == 1)] = torch.cat((o, M[np.where(done == 1)].view(-1,1)), axis=1)
                     first_step[np.where(done == 1)] = np.ones((len(np.where(done==1))))
-                    
-                    buf.finish_path(v, vc, done)
 
         # Save model
         if ((epoch % save_freq == 0) or (epoch == epochs-1)) and model_save:
@@ -728,10 +736,10 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', average_only=True)
-        logger.log_tabular('EpLen', average_only=True)
-        logger.log_tabular('EpCostRet', with_min_and_max=True)
+        logger.log_tabular('MaxEpLenRet', average_only=True)
         logger.log_tabular('EpCost', average_only=True)
         logger.log_tabular('EpMaxCost', average_only=True)
+        logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
         logger.log_tabular('CostRate', cost_rate)
         logger.log_tabular('VVals', average_only=True)
@@ -751,7 +759,10 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 def create_env(args):
     # env =  safe_rl_envs_Engine(configuration(args.task))
     #! TODO: make engine configurable
-    config = {'num_envs':args.env_num}
+    config = {
+        'num_envs':args.env_num,
+        '_seed':args.seed,
+        }
     env = safe_rl_envs_Engine(config)
     return env
 
@@ -760,7 +771,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
     parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
-    parser.add_argument('--target_cost', type=float, default=-0.1) # the cost limit for the environment
+    parser.add_argument('--target_cost', type=float, default=-0.05) # the cost limit for the environment
     parser.add_argument('--target_kl', type=float, default=0.02) # the kl divergence limit for SCPO
     parser.add_argument('--cost_reduction', type=float, default=0.) # the cost_reduction limit when current policy is infeasible
     parser.add_argument('--hid', type=int, default=64)

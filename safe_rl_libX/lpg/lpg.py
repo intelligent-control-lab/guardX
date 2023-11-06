@@ -90,6 +90,8 @@ class LpgBufferX:
         if np.all(self.path_start_idx == 0) and np.all(self.ptr == self.max_ep_len):
             # simplest case, all enviroment is done at end batch episode, 
             # proceed with batch operation
+            if len(last_val.shape) == 1:
+                last_val = last_val.unsqueeze(1)
             assert last_val.shape == (self.env_num, 1)
             rews = torch.hstack((self.rew_buf, last_val))
             vals = torch.hstack((self.val_buf, last_val))
@@ -101,8 +103,8 @@ class LpgBufferX:
             # the next line computes rewards-to-go, to be targets for the value function
             self.ret_buf = torch.from_numpy(core.batch_discount_cumsum(rews, self.gamma)[:,:-1].astype(np.float32)).to(device)
             
-            qcs = torch.hstack((self.qc_buf, torch.zeros(self.env_num, 1)))
-            costs = torch.hstack((self.cost_buf, torch.zeros(self.env_num, 1)))
+            qcs = torch.hstack((self.qc_buf, torch.zeros(self.env_num, 1).to(device)))
+            costs = torch.hstack((self.cost_buf, torch.zeros(self.env_num, 1).to(device)))
             self.targetc_buf = costs[:,:-1] + self.gamma * qcs[:,1:]
             
         else:
@@ -478,6 +480,8 @@ def lpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num) 
     # cum_cost is the cumulative cost over the training
     cum_cost, prev_c = 0, np.zeros(env_num)
+    
+    max_ep_len_ret = np.zeros(env_num)
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
@@ -505,6 +509,7 @@ def lpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             
             # update return, length, cost of env_num batch episodes
             ep_ret += r.cpu().numpy().squeeze()
+            max_ep_len_ret += r.cpu().numpy().squeeze()
             ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t)
             ep_len += 1
             
@@ -531,10 +536,12 @@ def lpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                                  EpLen=ep_len[np.where(ep_len == max_ep_len)],
                                  EpCostRet=ep_cost_ret[np.where(ep_len == max_ep_len)],
                                  EpCost=ep_cost[np.where(ep_len == max_ep_len)])
+                    logger.store(MaxEpLenRet=max_ep_len_ret)
                     buf.finish_path(v, done)
                     # reset environment 
                     o = env.reset()
                     ep_ret, ep_len, ep_cost, prev_c, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num), np.zeros(env_num)
+                    max_ep_len_ret = np.zeros(env_num)
                 else:
                     # trajectory finished for some environment
                     done = d.cpu().numpy() # finish path for certain environments
@@ -550,6 +557,9 @@ def lpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                             np.zeros(np.where(done == 1)[0].shape[0])
                     
                     buf.finish_path(v, done)
+                       
+                    # only reset observations for those done environments 
+                    o = env.reset_done()
 
         # Save model
         if ((epoch % save_freq == 0) or (epoch == epochs-1)) and model_save:
@@ -566,13 +576,14 @@ def lpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
-        logger.log_tabular('EpRet', with_min_and_max=True)
-        logger.log_tabular('EpCost', with_min_and_max=True)
-        logger.log_tabular('EpCostRet', with_min_and_max=True)
+        logger.log_tabular('EpRet', average_only=True)
+        logger.log_tabular('MaxEpLenRet', average_only=True)
+        logger.log_tabular('EpCostRet', average_only=True)
+        logger.log_tabular('EpCost', average_only=True)
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
         logger.log_tabular('CostRate', cost_rate)
-        logger.log_tabular('VVals', with_min_and_max=True)
+        logger.log_tabular('VVals', average_only=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*local_steps_per_epoch)
         logger.log_tabular('LossPi', average_only=True)
         logger.log_tabular('LossV', average_only=True)
@@ -588,7 +599,10 @@ def lpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 def create_env(args):
     # env =  safe_rl_envs_Engine(configuration(args.task))
     #! TODO: make engine configurable
-    config = {'num_envs':args.env_num}
+    config = {
+        'num_envs':args.env_num,
+        '_seed':args.seed,
+        }
     env = safe_rl_envs_Engine(config)
     return env
 

@@ -87,6 +87,8 @@ class APOBufferX:
             # proceed with batch operation
             if len(last_val.shape) == 1:
                 last_val = last_val.unsqueeze(1)
+            if len(last_val.shape) == 1:
+                last_val = last_val.unsqueeze(1)
             assert last_val.shape == (self.env_num, 1)
             rews = torch.hstack((self.rew_buf, last_val))
             vals = torch.hstack((self.val_buf, last_val))
@@ -384,8 +386,8 @@ def apo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         mean_var_surr = omega_1 * abs(tmp_1+tmp_2*omega_2).mean()
         
         if detailed:
-            kl_div = abs((logp_old - logp).mean().item())
-            epsilon = max(adv)
+            kl_div = torch.abs((logp_old - logp).mean()).item()
+            epsilon = torch.max(adv)
             bias = 4*gamma*kl_div*epsilon/(1-gamma)**2
             min_J_square = mean_surr**2 + 2*val.mean()*mean_surr
             if mean_surr + val.mean() - bias < 0:
@@ -491,6 +493,8 @@ def apo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num) 
     # cum_cost is the cumulative cost over the training
     cum_cost = 0 
+    
+    max_ep_len_ret = np.zeros(env_num)
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
@@ -509,6 +513,7 @@ def apo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             
             # update return, length, cost of env_num batch episodes
             ep_ret += r.cpu().numpy().squeeze()
+            max_ep_len_ret += r.cpu().numpy().squeeze()
             ep_len += 1
             # ep_cost += np.asarray([info_episode.cpu().numpy().squeeze() for info_episode in info['cost']])
             assert ep_cost.shape == info['cost'].cpu().numpy().squeeze().shape
@@ -533,10 +538,12 @@ def apo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     logger.store(EpRet=ep_ret[np.where(ep_len == max_ep_len)],
                                  EpLen=ep_len[np.where(ep_len == max_ep_len)],
                                  EpCost=ep_cost[np.where(ep_len == max_ep_len)])
+                    logger.store(MaxEpLenRet=max_ep_len_ret)
                     buf.finish_path(v, done)
                     # reset environment 
                     o = env.reset()
                     ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num)
+                    max_ep_len_ret = np.zeros(env_num)
                 else:
                     # trajectory finished for some environment
                     done = d.cpu().numpy() # finish path for certain environments
@@ -549,6 +556,9 @@ def apo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                             np.zeros(np.where(done == 1)[0].shape[0])
                     
                     buf.finish_path(v, done)
+                       
+                    # only reset observations for those done environments 
+                    o = env.reset_done()
 
         # Save model
         if ((epoch % save_freq == 0) or (epoch == epochs-1)) and model_save:
@@ -565,12 +575,13 @@ def apo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
-        logger.log_tabular('EpRet', with_min_and_max=True)
-        logger.log_tabular('EpCost', with_min_and_max=True)
+        logger.log_tabular('EpRet', average_only=True)
+        logger.log_tabular('MaxEpLenRet', average_only=True)
+        logger.log_tabular('EpCost', average_only=True)
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
         logger.log_tabular('CostRate', cost_rate)
-        logger.log_tabular('VVals', with_min_and_max=True)
+        logger.log_tabular('VVals', average_only=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*local_steps_per_epoch)
         logger.log_tabular('LossPi', average_only=True)
         logger.log_tabular('LossV', average_only=True)
@@ -586,7 +597,10 @@ def apo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 def create_env(args):
     # env =  safe_rl_envs_Engine(configuration(args.task))
     #! TODO: make engine configurable
-    config = {'num_envs':args.env_num}
+    config = {
+        'num_envs':args.env_num,
+        '_seed':args.seed,
+        }
     env = safe_rl_envs_Engine(config)
     return env
 
@@ -608,7 +622,7 @@ if __name__ == '__main__':
     parser.add_argument('--omega1', type=float, default=0.001)       
     parser.add_argument('--omega2', type=float, default=0.005)       
     parser.add_argument('--k', '-k', type=float, default=10.5)
-    parser.add_argument('--detailed', '-d', action='store_true', default=False)  
+    parser.add_argument('--notdetailed', '-d', action='store_false', default=True)  
     args = parser.parse_args()
 
     mpi_fork(args.cpu)  # run parallel code with mpi
@@ -624,4 +638,4 @@ if __name__ == '__main__':
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
         seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
         logger_kwargs=logger_kwargs, model_save=model_save, target_kl=args.target_kl,
-        k=args.k, omega_1=args.omega1, omega_2=args.omega2, detailed=args.detailed)
+        k=args.k, omega_1=args.omega1, omega_2=args.omega2, detailed=args.notdetailed)

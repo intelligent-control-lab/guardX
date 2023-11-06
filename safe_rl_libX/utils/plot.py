@@ -29,7 +29,8 @@ def plot_data(data, xaxis='Epoch', value="AverageEpRet", condition="Condition1",
 
     if isinstance(data, list):
         data = pd.concat(data, ignore_index=True)
-    sns.set(style="darkgrid", font_scale=1.5)
+    sns.set(style="darkgrid", font_scale=1.5, palette='colorblind')
+    # import ipdb; ipdb.set_trace()
     sns.tsplot(data=data, time=xaxis, value=value, unit="Unit", condition=condition, ci='sd', **kwargs)
     """
     If you upgrade to any version of Seaborn greater than 0.8.1, switch from 
@@ -75,7 +76,36 @@ def get_datasets(logdir, condition=None):
                 config_path = open(os.path.join(root,'config.json'))
                 config = json.load(config_path)
                 if 'exp_name' in config:
-                    exp_name = config['exp_name']
+                    if "apo" in config['exp_name']:
+                        exp_name = "APO"
+                    elif "trpofac" in config['exp_name']:
+                        exp_name = "TRPO-FAC"
+                    elif "trpoipo" in config['exp_name']:
+                        exp_name = "TRPO-IPO"
+                    elif "trpolag" in config['exp_name']:
+                        exp_name = "TRPO-LAG"
+                    elif "trpo" in config['exp_name']:
+                        exp_name = "TRPO"
+                    elif "ppo" in config['exp_name']:
+                        exp_name = "PPO"
+                    elif "a2c" in config['exp_name']:
+                        exp_name = "A2C"
+                    elif "pcpo" in config['exp_name']:
+                        exp_name = "PCPO"
+                    elif "scpo" in config['exp_name']:
+                        exp_name = "SCPO"
+                    elif "cpo" in config['exp_name']:
+                        exp_name = "CPO"
+                    elif "lpg" in config['exp_name']:
+                        exp_name = "LPG"
+                    elif "pdo" in config['exp_name']:
+                        exp_name = "PDO"
+                    elif "safelayer" in config['exp_name']:
+                        exp_name = "SafeLayer"
+                    elif "usl" in config['exp_name']:
+                        exp_name = "USL"
+                    else:
+                        exp_name = "Unkonw"
             except:
                 print('No file named config.json')
             condition1 = condition or exp_name or 'exp'
@@ -158,14 +188,14 @@ def get_all_datasets(all_logdirs, legend=None, select=None, exclude=None):
     return data
 
 
-def make_plots(all_logdirs, legend=None, xaxis=None, values=None, count=False,  
+def make_plots(all_logdirs, legend=None, xaxis=None, values=[], count=False,  
                font_scale=1.5, smooth=1, select=None, exclude=None, estimator='mean', results_dir=None, title='reward', reward_flag=True, cost_flag=False):
     # create a separate folder for each plot 
     # results_dir = osp.join(results_dir, title)
     data = get_all_datasets(all_logdirs, legend, select, exclude)
     # values = values if isinstance(values, list) else [values]
     
-    values = []
+    # values = []
     if reward_flag:
         values.append('Reward_Performance')
     if cost_flag:
@@ -177,11 +207,11 @@ def make_plots(all_logdirs, legend=None, xaxis=None, values=None, count=False,
     for value in values:
         subdir = title + '/'
         plt.figure()
-        try:
-            plot_data(data, xaxis=xaxis, value=value, condition=condition, smooth=smooth, estimator=estimator)
-        except:
-            print(f"this key {value} is not in the data")
-            break
+        #try:
+        plot_data(data, xaxis=xaxis, value=value, condition=condition, smooth=smooth, estimator=estimator)
+        # except:
+        #     print(f"this key {value} is not in the data")
+        #     break
         # make direction for save figure
         final_dir = osp.join(results_dir, subdir)
         existence = os.path.exists(final_dir)
