@@ -576,7 +576,7 @@ if __name__ == '__main__':
     parser.add_argument('--cpu', type=int, default=1)
     parser.add_argument('--env_num', type=int, default=400)
     parser.add_argument('--max_ep_len', type=int, default=1000)
-    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--exp_name', type=str, default='trpo')
     parser.add_argument('--model_save', action='store_true')
     parser.add_argument('--target_kl', type=float, default=0.02)
@@ -591,34 +591,7 @@ if __name__ == '__main__':
 
     # whether to save model
     model_save = True if args.model_save else False
-    # trpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
-    #     ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
-    #     seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
-    #     logger_kwargs=logger_kwargs, model_save=model_save, target_kl=args.target_kl)
-    
-    
-    num_envs = 1
-    config = {'num_envs':num_envs}
-    env = safe_rl_envs_Engine(config)
-
-    obs = env.reset()
-    t = time.time()
-
-    images = []
-    model_path = '/home/yifan/guardX/guardX/safe_rl_libX/trpo/logs/Goal_Point_8Hazards_trpo_kl0.02_epochs50_step400000/Goal_Point_8Hazards_trpo_kl0.02_epochs50_step400000_s0/pyt_save/model.pt'
-    ac = torch.load(model_path)
-    total_reward = 0
-    print("start")
-    for i in range(1000):
-        print(i)
-        act, v, logp, mu, logstd = ac.step(obs)
-        # import ipdb;ipdb.set_trace()
-        obs, reward, done, info = env.step(act)
-        total_reward += reward
-        env.render()
-        if done.cpu().numpy().any() > 0:
-            print("#######")
-            obs = env.reset_done()
-            # import ipdb;ipdb.set_trace()
-
-    print("finish ", time.time() - t)
+    trpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
+        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
+        seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
+        logger_kwargs=logger_kwargs, model_save=model_save, target_kl=args.target_kl)
