@@ -735,35 +735,8 @@ if __name__ == '__main__':
 
     # whether to save model
     model_save = True if args.model_save else False
-    # cpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
-    #     ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
-    #     seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
-    #     logger_kwargs=logger_kwargs, target_cost=args.target_cost, 
-    #     model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction)
-    
-    env_num = 1
-    config = {'env_num':env_num,
-              '_seed': 0}
-    env = safe_rl_envs_Engine(config)
-
-    obs = env.reset()
-    t = time.time()
-
-    images = []
-    model_path = '/home/yifan/guardX/guardX/safe_rl_libX/cpo/logs/Goal_Point_8Hazards_cpo_kl0.02_target_cost-0.1_epochs100_step400000/Goal_Point_8Hazards_cpo_kl0.02_target_cost-0.1_epochs100_step400000_s0/pyt_save/model.pt'
-    ac = torch.load(model_path)
-    total_reward = 0
-    print("start")
-    for i in range(3000):
-        print(i)
-        a, v, vc, logp, mu, logstd = ac.step(obs)
-        # import ipdb;ipdb.set_trace()
-        obs, reward, done, info = env.step(a)
-        total_reward += reward
-        env.render()
-        if done.cpu().numpy().any() > 0:
-            print("#######")
-            obs = env.reset_done()
-            # import ipdb;ipdb.set_trace()
-
-    print("finish ", time.time() - t)
+    cpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
+        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
+        seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
+        logger_kwargs=logger_kwargs, target_cost=args.target_cost, 
+        model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction)

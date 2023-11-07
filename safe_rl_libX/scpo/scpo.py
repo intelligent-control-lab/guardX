@@ -800,57 +800,10 @@ if __name__ == '__main__':
                 + '_' + 'step' + str(args.max_ep_len * args.env_num)
     logger_kwargs = setup_logger_kwargs(exp_name, args.seed)
     
-    t = time.time()
-    # # whether to save model
+    # whether to save model
     model_save = True if args.model_save else False
-    # scpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
-    #     ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
-    #     seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
-    #     logger_kwargs=logger_kwargs, target_cost=args.target_cost, 
-    #     model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction)
-    # print("finish ", time.time() - t)
-    env_num = 1
-
-    config = configuration(args.task)
-    config['_seed'] = 0
-    config['env_num'] = env_num
-    env = safe_rl_envs_Engine(config)
-
-    obs = env.reset()
-    t = time.time()
-
-    images = []
-    model_path = '/home/yifan/guardX/guardX/safe_rl_libX/scpo/logs/Goal_Point_8Hazards_scpo_fixed_kl0.02_target_cost-0.05_epoch200_step100000/Goal_Point_8Hazards_scpo_fixed_kl0.02_target_cost-0.05_epoch200_step100000_s0/pyt_save/model.pt'
-    ac = torch.load(model_path)
-    total_reward = 0
-    print("start")
-    M = torch.zeros(env_num, 1, dtype=torch.float32).to(device) # initialize the current maximum cost
-    o_aug = torch.cat((obs, M), axis=1)
-    first_step = True
-    for i in range(2000):
-        print(i)
-        a, v, vc, logp, mu, logstd = ac.step(o_aug)
-        # import ipdb;ipdb.set_trace()
-        obs, reward, done, info = env.step(a)
-        # import ipdb;ipdb.set_trace()
-        total_reward += reward
-        env.render()
-        if done.cpu().numpy().any() > 0:
-            print("#######")
-            obs = env.reset_done()
-            # import ipdb;ipdb.set_trace()
-        if first_step:
-            # the first step of each episode 
-            cost_increase = info['cost']
-            M_next = info['cost'][None,:]
-            first_step = False
-        else:
-            # the second and forward step of each episode
-            cost_increase = max(info['cost'] - M, 0)
-            M_next = M + cost_increase 
-        
-        # Update obs (critical!)
-        # o = next_o
-        # import ipdb;ipdb.set_trace()
-        o_aug = torch.cat((obs, M_next), axis=1)
-    print("finish ", time.time() - t)
+    scpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
+        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
+        seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
+        logger_kwargs=logger_kwargs, target_cost=args.target_cost, 
+        model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction)
