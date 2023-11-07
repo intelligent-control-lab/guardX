@@ -120,6 +120,7 @@ def _validate(m: mujoco.MjModel):
     typs = set(val) if isinstance(val, Iterable) else {val}
     unsupported_typs = typs - set(_TYPE_MAP[mj_type])
     if unsupported_typs:
+      print(mj_type, attrs, typs, unsupported_typs)
       raise NotImplementedError(f'{unsupported_typs} not implemented.')
 
   # check condim

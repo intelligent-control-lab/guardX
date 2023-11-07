@@ -559,7 +559,7 @@ def create_env(args):
     # env =  safe_rl_envs_Engine(configuration(args.task))
     #! TODO: make engine configurable
     config = {
-        'num_envs':args.env_num,
+        'env_num':args.env_num,
         '_seed':args.seed,
         }
     env = safe_rl_envs_Engine(config)
@@ -598,14 +598,14 @@ if __name__ == '__main__':
     
     
     num_envs = 1
-    config = {'num_envs':num_envs}
+    config = {'env_num':num_envs}
     env = safe_rl_envs_Engine(config)
 
     obs = env.reset()
     t = time.time()
 
     images = []
-    model_path = '/home/yifan/guardX/guardX/safe_rl_libX/trpo/logs/Goal_Point_8Hazards_trpo_kl0.02_epochs50_step400000/Goal_Point_8Hazards_trpo_kl0.02_epochs50_step400000_s0/pyt_save/model.pt'
+    model_path = '/home/yifan/guardX/guardX/safe_rl_libX/trpo/logs/Goal_Point_8Hazards_trpo_kl0.02_epochs100_step240000/Goal_Point_8Hazards_trpo_kl0.02_epochs100_step240000_s0/pyt_save/model.pt'
     ac = torch.load(model_path)
     total_reward = 0
     print("start")
