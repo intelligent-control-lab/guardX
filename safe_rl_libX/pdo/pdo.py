@@ -647,7 +647,7 @@ def create_env(args):
     # env =  safe_rl_envs_Engine(configuration(args.task))
     #! TODO: make engine configurable
     config = {
-        'num_envs':args.env_num,
+        'env_num':args.env_num,
         '_seed':args.seed,
         }
     env = safe_rl_envs_Engine(config)
@@ -667,9 +667,9 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=1)
-    parser.add_argument('--env_num', type=int, default=400)
-    parser.add_argument('--max_ep_len', type=int, default=1000)
-    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--env_num', type=int, default=1200)
+    parser.add_argument('--max_ep_len', type=int, default=200)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--exp_name', type=str, default='pdo_minus')
     parser.add_argument('--model_save', action='store_true')
     args = parser.parse_args()

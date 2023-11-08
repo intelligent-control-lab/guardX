@@ -709,7 +709,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
     parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
-    parser.add_argument('--target_cost', type=float, default=0.) # the cost limit for the environment
+    parser.add_argument('--target_cost', type=float, default=0.0) # the cost limit for the environment
     parser.add_argument('--target_kl', type=float, default=0.02) # the kl divergence limit for CPO
     parser.add_argument('--cost_reduction', type=float, default=0.) # the cost_reduction limit when current policy is infeasible
     parser.add_argument('--hid', type=int, default=64)
@@ -717,9 +717,9 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=1)
-    parser.add_argument('--env_num', type=int, default=400)
-    parser.add_argument('--max_ep_len', type=int, default=1000)
-    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--env_num', type=int, default=1200)
+    parser.add_argument('--max_ep_len', type=int, default=200)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--exp_name', type=str, default='cpo')
     parser.add_argument('--model_save', action='store_true')
     args = parser.parse_args()

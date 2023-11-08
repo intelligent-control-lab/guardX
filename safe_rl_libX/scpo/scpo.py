@@ -764,15 +764,10 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 def create_env(args):
     # env =  safe_rl_envs_Engine(configuration(args.task))
     #! TODO: make engine configurable
-    # config = {
-    #     'num_envs':args.env_num,
-    #     '_seed':args.seed,
-    #     }
-    
-    config = configuration(args.task)
-    config['_seed'] = 0
-    config['env_num'] = args.env_num
-    import ipdb;ipdb.set_trace()
+    config = {
+        'env_num':args.env_num,
+        '_seed':args.seed,
+        }
     env = safe_rl_envs_Engine(config)
     return env
 
@@ -781,7 +776,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
     parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
-    parser.add_argument('--target_cost', type=float, default=-0.05) # the cost limit for the environment
+    parser.add_argument('--target_cost', type=float, default=-0.1) # the cost limit for the environment
     parser.add_argument('--target_kl', type=float, default=0.02) # the kl divergence limit for SCPO
     parser.add_argument('--cost_reduction', type=float, default=0.) # the cost_reduction limit when current policy is infeasible
     parser.add_argument('--hid', type=int, default=64)
@@ -789,8 +784,8 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=1)
-    parser.add_argument('--env_num', type=int, default=400)
-    parser.add_argument('--max_ep_len', type=int, default=1000)
+    parser.add_argument('--env_num', type=int, default=1200)
+    parser.add_argument('--max_ep_len', type=int, default=200)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--exp_name', type=str, default='scpo_fixed')
     parser.add_argument('--model_save', action='store_true')

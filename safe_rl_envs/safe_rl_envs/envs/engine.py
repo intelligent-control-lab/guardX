@@ -499,8 +499,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         obs, self._data = self._reset_done(self._data,
                                             self._done,
                                             self._obs,
-                                            layout,
-                                            self.key)
+                                            layout)
         return jax_to_torch(obs)
     
     def placements_dict_from_object(self, object_name):
