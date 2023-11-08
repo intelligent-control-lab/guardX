@@ -165,39 +165,35 @@ class C_Critic(nn.Module):
     def safety_correction(self, obs, act, prev_cost, delta=0., Niter = 20, eta = 0.05):
         obs = torch.as_tensor(obs, dtype=torch.float32).to(self.device)
         act = torch.as_tensor(act, dtype=torch.float32).to(self.device)
-        act.requires_grad_()
         
+        act.requires_grad_()
         pred = self.forward(torch.cat((obs,act), axis=1))
-        act_result = torch.zeros(act.shape).to(device=self.device)
-        act_result[torch.where(pred<=delta)] = act[torch.where(pred<=delta)]
-        if len(torch.where(pred>delta)) != 0:
-            index = np.array(np.where(pred.detach().cpu().numpy()>delta)).squeeze()
-            for i in range(Niter):
-                max_a, _ = torch.max(act[index], axis=1)
-                max_index = index[np.where(max_a.detach().cpu().numpy() > self.max_action)]
-                act_result[max_index] = act[max_index]
-                index = np.setdiff1d(index, max_index)
-                if index.size == 0:
-                    break;
-                
-                act.requires_grad_()
-                tmp_act = act[index]
-                tmp_act.retain_grad()
-                self.c_net.zero_grad()
-                pred = self.forward(torch.cat((obs[index],tmp_act), axis=1))
-                pred.mean().backward(retain_graph=True)
-                less_index = index[np.where(pred.detach().cpu().numpy()<=delta)]
-                act_result[less_index] = act[less_index]
-                index = np.setdiff1d(index, less_index)
-                if index.size == 0:
-                    break;
-                
-                act.requires_grad_(False)
-                grad_index = np.setdiff1d(np.arange(tmp_act.shape[0]), np.array(np.where(pred.detach().cpu().numpy()<=delta)).squeeze())
-                Z, _ = torch.max(torch.abs(tmp_act.grad[grad_index]), axis=1)
-                act[index] = act[index] - eta * tmp_act.grad[grad_index] / (Z.unsqueeze(-1) + 1e-8)
-                
-            return act_result.detach()
+        index = torch.where(pred<=delta)[0]
+        
+        for i in range(Niter):
+            max_a, _ = torch.max(act, axis=1)
+            max_index = torch.where(max_a > self.max_action)[0]
+            index = torch.unique(torch.cat((index, max_index)))
+            if index.shape[0] == act.shape[0]:
+                break;
+            
+            act.requires_grad_()
+            act.retain_grad()
+            self.c_net.zero_grad()
+            pred = self.forward(torch.cat((obs,act), axis=1))
+            pred.mean().backward(retain_graph=True)
+            less_index = torch.where(pred <= delta)[0]
+            index = torch.unique(torch.cat((index, less_index)))
+            if index.shape[0] == act.shape[0]:
+                break;
+            
+            Z, _ = torch.max(torch.abs(act.grad), axis=1)
+            full_index = torch.arange(act.shape[0]).to(self.device)
+            update_index = full_index[~torch.isin(full_index, index)]
+            act.requires_grad_(False)
+            act[update_index] = act[update_index] - eta * act.grad[update_index] / (Z[update_index].unsqueeze(-1) + 1e-8)
+            
+        return act.detach()        
         
         # if pred <= delta:
         #     return act.detach().cpu().numpy()
@@ -215,7 +211,6 @@ class C_Critic(nn.Module):
         #         act = act - eta * act.grad / (Z + 1e-8)
 
         #     return act.detach().cpu().numpy()
-    
 
 
 class MLPActorCritic(nn.Module):
