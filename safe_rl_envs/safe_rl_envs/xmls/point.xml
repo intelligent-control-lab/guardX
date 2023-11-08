@@ -1,6 +1,6 @@
 <mujoco>
     <size njmax="3000" nconmax="1000"/>
-    <option timestep="0.002"/>
+    <option timestep="0.02"/>
     <default>
 		<geom condim="3" density="1" rgba="1 0 0 1"></geom>
 		<joint damping=".001"></joint>
@@ -13,9 +13,9 @@
         <body name="robot" pos="0 0 .1">
             <camera name="vision" pos="0 0 .15" xyaxes="0 -1 0 .4 0 1" fovy="90"/>
             <!-- <geom name="camera" pos="-.2 0 0" type="sphere" size=".05"/> -->
-            <joint type="slide" axis="1 0 0" name="robot_x" damping="0.1"/>
-            <joint type="slide" axis="0 1 0" name="robot_y" damping="0.1"/>
-            <!-- <joint type="hinge" axis="0 0 1" name="robot_z" damping="0.005"/> -->
+            <joint type="slide" axis="1 0 0" name="robot_x" damping="0.01"/>
+            <joint type="slide" axis="0 1 0" name="robot_y" damping="0.01"/>
+            <joint type="hinge" axis="0 0 1" name="robot_z" damping="0.005"/>
             <geom name="robot" type="sphere" size=".1" friction="1 0.01 0.01"/>
             <geom name="pointarrow" pos="0.1 0 0" size="0.05 0.05 0.05" type="box"/>
             <site name="robot" rgba="1 0 0 .1"/>
@@ -34,7 +34,8 @@
         <subtreeangmom body="robot" name="subtreeangmom"/>
     </sensor>
     <actuator>
-        <motor gear="200" joint="robot_x" name="x"/>
-        <motor gear="200" joint="robot_y" name="y"/>
+        <general gear="0.3" joint="robot_x" name="x"/>
+        <general gear="0.3" joint="robot_y" name="y"/>
+        <general gear="0.3" joint="robot_z" name="z"/>
     </actuator>
 </mujoco>

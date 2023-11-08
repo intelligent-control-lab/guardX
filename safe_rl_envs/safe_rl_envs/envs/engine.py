@@ -98,7 +98,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
     DEFAULT = {
         'num_steps': 1000,  # Maximum number of environment steps in an episode
         'device_id': 0,
-        'num_envs': 1, # Number of the batched environment
+        'env_num': 1, # Number of the batched environment
         
         'placements_extents': [-2, -2, 2, 2],  # Placement limits (min X, min Y, max X, max Y)
         'placements_margin': 0.0,  # Additional margin added to keepout when placing objects
@@ -118,7 +118,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         'observation_flatten': True,  # Flatten observation into a vector
         'observe_goal_lidar': True,  # Observe the goal with a lidar sensor
         'observe_goal_comp': True,  # Observe a compass vector to the goal
-        'observe_hazards': False,  # Observe the vector from agent to hazards
+        'observe_hazards': True,  # Observe the vector from agent to hazards
         # These next observations are unnormalized, and are only for debugging
         'observe_qpos': True,  # Observe the qpos of the world
         'observe_qvel': True,  # Observe the qvel of the robot
@@ -136,6 +136,14 @@ class Engine(gym.Env, gym.utils.EzPickle):
         'render_lidar_offset_init': 0.5, 
         'render_lidar_offset_delta': 0.06, 
 
+        # Sensor observations
+        # Specify which sensors to add to observation space
+        'sensors_obs': ['accelerometer', 'velocimeter', 'gyro', 'magnetometer'],
+        'sensors_hinge_joints': True,  # Observe named joint position / velocity sensors
+        'sensors_ball_joints': True,  # Observe named balljoint position / velocity sensors
+        'sensors_angle_components': True,  # Observe sin/cos theta instead of theta
+
+        
         # Lidar observation parameters
         'lidar_num_bins': 16,  # Bins (around a full circle) for lidar sensing
         'lidar_num_bins3D': 1,  # Bins (around a full circle) for lidar sensing
@@ -184,10 +192,10 @@ class Engine(gym.Env, gym.utils.EzPickle):
         'constrain_indicator': True,  # If true, all costs are either 1 or 0 for a given step.
 
         # Hazardous areas
-        'hazards_num': 6,  # Number of hazards in an environment
+        'hazards_num': 8,  # Number of hazards in an environment
         'hazards_placements': None,  # Placements list for hazards (defaults to full extents)
         'hazards_locations': [],  # Fixed locations to override placements
-        'hazards_keepout': 0.45,  # Radius of hazard keepout for placement
+        'hazards_keepout': 0.4,  # Radius of hazard keepout for placement
         'hazards_size': 0.3,  # Radius of hazards
         'hazards_cost': 1.0,  # Cost (per step) for violating the constraint
 
@@ -235,10 +243,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
         #----------------------------------------------------------------
         
         # Use jax.vmap to warp single environment reset to batched reset function
-        def batched_reset(rng: jax.Array, layout_valid):
-            if self.num_envs is not None:
-                rng = jax.random.split(rng, self.num_envs)
-            return jax.vmap(self.mjx_reset)(rng, layout_valid)
+        def batched_reset(layout_valid):
+            return jax.vmap(self.mjx_reset)(layout_valid)
         
         # Use jax.vmap to warp single environment step to batched step function
         def batched_step(data: mjx.Data, last_data: mjx.Data, last_last_data: mjx.Data, last_done: jax.Array, last_last_done: jax.Array, action: jax.Array):
@@ -247,15 +253,12 @@ class Engine(gym.Env, gym.utils.EzPickle):
         def batched_reset_done(data: mjx.Data,
                                done: jax.Array, 
                                obs: jax.Array,
-                               layout,
-                               rng: jax.Array):
-            if self.num_envs is not None:
-                rng = jax.random.split(rng, self.num_envs)
-            return jax.vmap(self.mjx_reset_done)(data, done, obs, layout, rng)
+                               layout):
+            return jax.vmap(self.mjx_reset_done)(data, done, obs, layout)
         
         # Use jax.vmap to warp single environment reset to batched reset function
         def batched_sample_layout(rng: jax.Array):
-            if self.num_envs is not None:
+            if self.env_num is not None:
                 rng = jax.random.split(rng, int(1e6))
             return jax.vmap(self.sample_layout)(rng)
     
@@ -286,9 +289,12 @@ class Engine(gym.Env, gym.utils.EzPickle):
         #----------------------------------------------------------------
         ctrl_range = self.mj_model.actuator_ctrlrange
         ctrl_range[~(self.mj_model.actuator_ctrllimited == 1), :] = np.array([-np.inf, np.inf])
+        if 'point' in self.robot_base:
+            ctrl_range = ctrl_range[:2,:]
         action = jax.tree_map(np.array, ctrl_range)
         self.action_space = gym.spaces.Box(action[:, 0], action[:, 1], dtype=np.float32)
-        # self.action_space = utils.batch_space(action_space, self.num_envs)
+        self.action_space = gym.spaces.Box(action[:, 0], action[:, 1], dtype=np.float32)
+        # self.action_space = utils.batch_space(action_space, self.env_num)
         self._done = None
         self.build_observation_space()
         self.build_placements_dict()
@@ -404,10 +410,10 @@ class Engine(gym.Env, gym.utils.EzPickle):
         if self.observation_flatten:
             self.obs_flat_size = sum([np.prod(i.shape) for i in self.obs_space_dict.values()])
             self.observation_space = gym.spaces.Box(-np.inf, np.inf, (self.obs_flat_size,), dtype=np.float32)
-            # self.observation_space = utils.batch_space(self.observation_space, self.num_envs)
+            # self.observation_space = utils.batch_space(self.observation_space, self.env_num)
         else:
             for k, v in self.obs_space_dict.items():
-                self.obs_space_dict[k] = utils.batch_space(v, self.num_envs)
+                self.obs_space_dict[k] = utils.batch_space(v, self.env_num)
             self.observation_space = gym.spaces.Dict(obs_space_dict)
 
 
@@ -422,7 +428,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self._last_last_done = deepcopy(self._last_done)
         self._last_done = deepcopy(self._done)
         self.key,_ = jax.random.split(self.key, 2)
-    
+
     def reset_layout(self):
         layout, success = self._sample_layout(self.key)
         
@@ -434,10 +440,10 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self.layout
         self.layout_size = len(idx)
         print("number of valid layout is: ", self.layout_size)
-        assert self.layout_size > self.num_envs
+        assert self.layout_size > self.env_num
         
     def get_layout(self):
-        idx = jax.random.randint(self.key, (self.num_envs,), minval=0, maxval=self.layout_size)
+        idx = jax.random.randint(self.key, (self.env_num,), minval=0, maxval=self.layout_size)
         layout_valid = {}
         for key in self.layout.keys():
             layout_valid[key] = self.layout[key][idx]
@@ -450,9 +456,10 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self.reset_layout()
         layout = self.get_layout()
         # import ipdb;ipdb.set_trace()
-        obs, data = self._reset(self.key, layout)
+        obs, data = self._reset(layout)
         # import ipdb;ipdb.set_trace()
         # update the log
+        self._steps = jp.zeros(self.env_num)
         self._obs = obs
         self._data = data
         
@@ -480,6 +487,10 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self._reward = reward
         self._done = done
         self._info = info
+        
+        self._done  = jp.where(self._steps > self.num_steps, x = 1.0, y = self._done)
+        self._steps = jp.where(self._done > 0.0, x = 0, y = self._steps + 1)
+        
         return jax_to_torch(self._obs), jax_to_torch(self._reward), jax_to_torch(self._done), jax_to_torch(self._info)
     
     def reset_done(self):
@@ -492,16 +503,6 @@ class Engine(gym.Env, gym.utils.EzPickle):
                                             self.key)
         return jax_to_torch(obs)
     
-    # def build_layout(self, rng):
-    #     ''' Rejection sample a placement of objects to find a layout. '''
-    #     # if not self.randomize_layout:
-    #     #     self.rs = np.random.RandomState(0)
-    #     rng, rng1, rng2 = jax.random.split(rng, 3)
-        
-    #     layout = {}
-    #     layout["hazards_pos"] = jax.random.uniform(rng1, (8,3), minval=self.hazards_placements[0], maxval=self.hazards_placements[1])
-    #     layout["goal_pos"] = jax.random.uniform(rng1, (1,3), minval=-2.0, maxval=2.0)
-    #     return layout  
     def placements_dict_from_object(self, object_name):
         ''' Get the placements dict subset just for a given object name '''
         placements_dict = {}
@@ -551,8 +552,6 @@ class Engine(gym.Env, gym.utils.EzPickle):
                 other_keepout = self.placements[other_name][1]
                 dist = jp.sqrt(jp.sum(jp.square(xy - other_xy)))
                 flag = jp.where(dist < other_keepout + self.placements_margin + keepout, x=0., y=flag)
-                # if dist < other_keepout + self.placements_margin + keepout:
-                #     return False
             return flag
 
         layout = {}
@@ -639,7 +638,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
     # jax parallel wrapper functions
     #----------------------------------------------------------------
 
-    def mjx_reset(self, rng, layout):
+    def mjx_reset(self, layout):
         """ Resets an unbatched environment to an initial state."""
         #! TODO: update qpose with layout
         # layout = self.build_layout(rng)
@@ -666,7 +665,24 @@ class Engine(gym.Env, gym.utils.EzPickle):
                 mjx.step(self.mjx_model, data),
                 None,
             )
-        data = data.replace(ctrl=action)
+        
+        def convert_action(action):
+            mjx_action = action
+            if 'point' in self.robot_base:
+                mjx_action = jp.zeros(3)
+                xmat = data.xmat.reshape(-1,3,3)
+                robot_mat = xmat[self.body_name2xpos_id['robot'],:]
+                robot_action = jp.array([action[0],0.,0.])
+                world_action = jp.matmul(robot_action, robot_mat.transpose())[:2]
+                world_action = jp.matmul(robot_mat, robot_action)[:2]
+                mjx_action = mjx_action.at[0].set(world_action[0])
+                mjx_action = mjx_action.at[1].set(world_action[1])
+                mjx_action = mjx_action.at[2].set(action[1])
+                # import ipdb;ipdb.set_trace()
+            return mjx_action
+        
+        mjx_action = convert_action(action)
+        data = data.replace(ctrl=mjx_action)
         data, _ = jax.lax.scan(f, data, (), self.physics_steps_per_control_step)
         obs, obs_dict = self.obs(data, last_data, last_last_data, last_done, last_last_done)
         reward, done = self.reward_done(data, last_data, last_done)
@@ -680,8 +696,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
                         data: mjx.Data, 
                         done: jp.ndarray,
                         obs: jp.ndarray,
-                        layout,
-                        rng):
+                        layout):
         """Runs one timestep of the environment's dynamics."""
         # qpos_reset = jax.random.uniform(rng, (self.mjx_model.nq,), minval=-1.5, maxval=1.5)
         # import ipdb;ipdb.set_trace()

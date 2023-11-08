@@ -495,6 +495,8 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 _, v, _, _, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
                 if timeout:
                     done = np.ones(env_num) # every environment needs to finish path
+                    # no bootstrap for timeout and done environment 
+                    v[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0]).to(device)
                     # logger.store(EpRet=ep_ret, EpLen=ep_len, EpCost=ep_cost)
                     logger.store(EpRet=ep_ret[np.where(ep_len == max_ep_len)],
                                  EpLen=ep_len[np.where(ep_len == max_ep_len)],
@@ -559,7 +561,7 @@ def create_env(args):
     # env =  safe_rl_envs_Engine(configuration(args.task))
     #! TODO: make engine configurable
     config = {
-        'num_envs':args.env_num,
+        'env_num':args.env_num,
         '_seed':args.seed,
         }
     env = safe_rl_envs_Engine(config)

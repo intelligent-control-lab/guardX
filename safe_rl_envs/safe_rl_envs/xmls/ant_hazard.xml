@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<mujoco model="ant_tiny">
+<mujoco>
 	<option timestep="0.02"></option>
 	<size njmax="3000" nconmax="1000"></size>
 	<default>
@@ -10,10 +10,10 @@
 	</default>
 	<worldbody>
 		<geom name="floor" size="3.5 3.5 0.1" type="plane" condim="3" rgba="1 1 1 1" material="MatPlane"></geom>
-		<body name="robot" pos="0.0 0.0 0.75" quat="1.0 0.0 0.0 0.0">
+		<body name="robot" pos="0.0 0.0 0.75" quat="0.2533820055482905 0.0 0.0 0.9673663004593069">
 			<site name="robot" rgba="1 0 0 .01"></site>
 			<camera name="vision" pos=".125 0 .2" xyaxes="0 -1 0 .4 0 1" fovy="100"></camera>
-			<camera name="track" mode="track" pos="0.0 -2.0 2" xyaxes="1.0 -0.0 0 0.0 1.0 1"></camera>
+			<camera name="track" mode="track" pos="-0.9804528532408373 1.7431902370573045 2" xyaxes="-0.8715951185286522 -0.49022642662041865 0 0.49022642662041865 -0.8715951185286522 1"></camera>
 			<geom name="robot" pos="0 0 0" size="0.06" type="sphere"></geom>
 			<joint armature="0" damping="0" limited="false" margin="0.01" name="robot" pos="0 0 0" type="free"></joint>
 			<body name="front_left_leg" pos="0 0 0">
@@ -68,71 +68,22 @@
 					</body>
 				</body>
 			</body>
-		</body>
-		<body name="goal" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
-			<joint type="slide" axis="1 0 0" name="goal_x" damping="0" limited="false"></joint>
-			<joint type="slide" axis="0 1 0" name="goal_y" damping="0" limited="false"></joint>
+		</body> 
+		<body name="goal" pos="0. 0. 0." quat="1. 0. 0. 0.">
+			<joint type="slide" axis="1 0 0" name="goal_x" damping="0" limited="false"/>
+            <joint type="slide" axis="0 1 0" name="goal_y" damping="0" limited="false"/>
 			<geom name="goal" type="sphere" size="0.5" rgba="0.0 1.0 0.0 0.25" group="0" contype="0" conaffinity="0"></geom>
 		</body>
-		<body name="hazard0" pos="0.0 0.0 0.02" quat="1.0 0.0 0.0 0.0">
-			<joint type="slide" axis="1 0 0" name="hazard0_x" damping="0" limited="false"></joint>
-			<joint type="slide" axis="0 1 0" name="hazard0_y" damping="0" limited="false"></joint>
-			<geom name="hazard0" type="cylinder" size="0.3 0.01" rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
-		</body>
-		<body name="hazard1" pos="0.0 0.0 0.02" quat="1.0 0.0 0.0 0.0">
-			<joint type="slide" axis="1 0 0" name="hazard1_x" damping="0" limited="false"></joint>
-			<joint type="slide" axis="0 1 0" name="hazard1_y" damping="0" limited="false"></joint>
-			<geom name="hazard1" type="cylinder" size="0.3 0.01" rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
-		</body>
-		<body name="hazard2" pos="0.0 0.0 0.02" quat="1.0 0.0 0.0 0.0">
-			<joint type="slide" axis="1 0 0" name="hazard2_x" damping="0" limited="false"></joint>
-			<joint type="slide" axis="0 1 0" name="hazard2_y" damping="0" limited="false"></joint>
-			<geom name="hazard2" type="cylinder" size="0.3 0.01" rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
-		</body>
-		<body name="hazard3" pos="0.0 0.0 0.02" quat="1.0 0.0 0.0 0.0">
-			<joint type="slide" axis="1 0 0" name="hazard3_x" damping="0" limited="false"></joint>
-			<joint type="slide" axis="0 1 0" name="hazard3_y" damping="0" limited="false"></joint>
-			<geom name="hazard3" type="cylinder" size="0.3 0.01" rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
-		</body>
-		<body name="hazard4" pos="0.0 0.0 0.02" quat="1.0 0.0 0.0 0.0">
-			<joint type="slide" axis="1 0 0" name="hazard4_x" damping="0" limited="false"></joint>
-			<joint type="slide" axis="0 1 0" name="hazard4_y" damping="0" limited="false"></joint>
-			<geom name="hazard4" type="cylinder" size="0.3 0.01" rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
-		</body>
-		<body name="hazard5" pos="0.0 0.0 0.02" quat="1.0 0.0 0.0 0.0">
-			<joint type="slide" axis="1 0 0" name="hazard5_x" damping="0" limited="false"></joint>
-			<joint type="slide" axis="0 1 0" name="hazard5_y" damping="0" limited="false"></joint>
-			<geom name="hazard5" type="cylinder" size="0.3 0.01" rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
+		<body name="hazard0" pos="0. 0. 0." quat="1. 0. 0. 0.">
+			<joint type="slide" axis="1 0 0" name="hazard0_x" damping="0" limited="false"/>
+            <joint type="slide" axis="0 1 0" name="hazard0_y" damping="0" limited="false"/>
+			<geom name="hazard0" type="sphere" size="0.3 " rgba="0.0 0.0 1.0 0.25" group="3" contype="0" conaffinity="0"></geom>
 		</body>
 		<light cutoff="100" diffuse="1 1 1" dir="0 0 -1" directional="true" exponent="1" pos="0 0 0.5" specular="0 0 0" castshadow="false"></light>
 		<camera name="fixednear" pos="0 -2 2" zaxis="0 -1 1"></camera>
 		<camera name="fixedfar" pos="0 -5 5" zaxis="0 -1 1"></camera>
 	</worldbody>
 	<sensor>
-		<touch site="ankle_1a" name="touch_ankle_1a"></touch>
-		<touch site="ankle_2a" name="touch_ankle_2a"></touch>
-		<touch site="ankle_3a" name="touch_ankle_3a"></touch>
-		<touch site="ankle_4a" name="touch_ankle_4a"></touch>
-		<touch site="ankle_1b" name="touch_ankle_1b"></touch>
-		<touch site="ankle_2b" name="touch_ankle_2b"></touch>
-		<touch site="ankle_3b" name="touch_ankle_3b"></touch>
-		<touch site="ankle_4b" name="touch_ankle_4b"></touch>
-		<jointpos joint="hip_1" name="jointpos_hip_1"></jointpos>
-		<jointpos joint="hip_2" name="jointpos_hip_2"></jointpos>
-		<jointpos joint="hip_3" name="jointpos_hip_3"></jointpos>
-		<jointpos joint="hip_4" name="jointpos_hip_4"></jointpos>
-		<jointpos joint="ankle_1" name="jointpos_ankle_1"></jointpos>
-		<jointpos joint="ankle_2" name="jointpos_ankle_2"></jointpos>
-		<jointpos joint="ankle_3" name="jointpos_ankle_3"></jointpos>
-		<jointpos joint="ankle_4" name="jointpos_ankle_4"></jointpos>
-		<jointvel joint="hip_1" name="jointvel_hip_1"></jointvel>
-		<jointvel joint="hip_2" name="jointvel_hip_2"></jointvel>
-		<jointvel joint="hip_3" name="jointvel_hip_3"></jointvel>
-		<jointvel joint="hip_4" name="jointvel_hip_4"></jointvel>
-		<jointvel joint="ankle_1" name="jointvel_ankle_1"></jointvel>
-		<jointvel joint="ankle_2" name="jointvel_ankle_2"></jointvel>
-		<jointvel joint="ankle_3" name="jointvel_ankle_3"></jointvel>
-		<jointvel joint="ankle_4" name="jointvel_ankle_4"></jointvel>
 		<accelerometer site="robot" name="accelerometer"></accelerometer>
 		<velocimeter site="robot" name="velocimeter"></velocimeter>
 		<gyro site="robot" name="gyro"></gyro>
@@ -142,7 +93,7 @@
 		<subtreeangmom body="robot" name="subtreeangmom"></subtreeangmom>
 	</sensor>
 	<actuator>
-		<motor name="hip_1" joint="hip_1"></motor>
+        <motor name="hip_1" joint="hip_1"></motor>
 		<motor name="ankle_1" joint="ankle_1"></motor>
 		<motor name="hip_2" joint="hip_2"></motor>
 		<motor name="ankle_2" joint="ankle_2"></motor>
