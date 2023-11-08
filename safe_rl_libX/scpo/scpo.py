@@ -683,7 +683,10 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 _, v, vc, _, _, _ = ac.step(o_aug)
                 if timeout:
                     done = np.ones(env_num) # every environment needs to finish path
-                    # logger.store(EpRet=ep_ret, EpLen=ep_len, EpCost=ep_cost)
+                    # no bootstrap for timeout and done environment 
+                    v[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0]).to(device)
+                    vc[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0]).to(device)
+                    
                     logger.store(EpRet=ep_ret[np.where(ep_len == max_ep_len)],
                                  EpLen=ep_len[np.where(ep_len == max_ep_len)],
                                  EpCostRet=ep_cost_ret[np.where(ep_len == max_ep_len)],
@@ -714,6 +717,8 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                             np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0]), \
                             np.zeros(np.where(done == 1)[0].shape[0])
+                    
+                    buf.finish_path(v, vc, done)
                     
                     o = env.reset_done()[np.where(done==1)]
                     M[np.where(done == 1)] = torch.zeros((len(np.where(done==1)))).to(device)
