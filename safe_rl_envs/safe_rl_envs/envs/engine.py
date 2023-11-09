@@ -625,6 +625,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
                 y_idx = self.joint_name2qpos_id['robot'] + 1
                 qpos_reset = qpos_reset.at[x_idx].set(layout[key][0])
                 qpos_reset = qpos_reset.at[y_idx].set(layout[key][1])
+                qpos_reset = qpos_reset.at[x_idx + 2].set(self.robot.z_height)
                 qpos_reset = qpos_reset.at[x_idx + 3].set(1.0)
             else:
                 x_idx = self.joint_name2qpos_id[key + '_x']

@@ -1,4 +1,4 @@
-<mujoco model="walker3d_tiny">
+<mujoco model="walker">
   <compiler angle="degree" coordinate="local" inertiafromgeom="true"/>
   <size njmax="3000" nconmax="1000"/>
   <default>
@@ -6,16 +6,16 @@
     <geom condim="3" density="500" friction=".7 .1 .1" rgba="1 0 0  1"/>
     <site size="0.05" type="sphere" rgba="0 0 1 0"/>
   </default>
-  <option timestep="0.005"/>
+  <option timestep="0.02"/>
   <worldbody>
     <geom name="floor" size="5 5 0.1" type="plane" condim="3"/>
     <body name="robot" pos="0 0 0.43">
       <site name="robot" rgba="1 0 0 .1"/>
       <camera name="vision" pos=".125 0 .2" xyaxes="0 -1 0 .4 0 1" fovy="100"/>
       <!-- <joint armature="0" damping="0" limited="false" margin="0.01" name="root" pos="0 0 0" type="free"/> -->
-      <joint armature="0" axis="1 0 0" damping="5" limited="false" name="rootx" pos="0 0 0" stiffness="0" type="slide"/>
-      <joint armature="0" axis="0 0 1" damping="1" limited="false" name="rootz" pos="0 0 0" stiffness="0.1" type="hinge"/>
-      <joint armature="0" axis="0 1 0" damping="5" limited="false" name="rooty" pos="0 0 0" stiffness="0" type="slide"/>
+      <joint armature="0" axis="1 0 0" damping="5" limited="false" name="robot_x" pos="0 0 0" stiffness="0" type="slide"/>
+      <joint armature="0" axis="0 0 1" damping="1" limited="false" name="robot_z" pos="0 0 0" stiffness="0.1" type="hinge"/>
+      <joint armature="0" axis="0 1 0" damping="5" limited="false" name="robot_y" pos="0 0 0" stiffness="0" type="slide"/>
       
       <geom friction="0.9" fromto="0 0.1 0 0 -0.1 0" name="robot_geom" size="0.03" type="capsule"/>
       <body name="right_thigh" pos="0 0.1 0">

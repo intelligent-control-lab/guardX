@@ -1,5 +1,5 @@
 <mujoco model="ant_tiny">
-  <option timestep="0.02"/>
+  <option timestep="0.05"/>
   <size njmax="3000" nconmax="1000"/>
   <default>
     <joint armature="1" damping="1" limited="true"/>
