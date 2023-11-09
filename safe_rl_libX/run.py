@@ -73,10 +73,15 @@ if __name__ == "__main__":
     python_files_and_args = []
     # 'a2c', 'apo', 'trpo', 'ppo'
     # 'cpo', 'lpg', 'pcpo', 'pdo', 'safelayer', 'scpo', 'trpofac', 'trpoipo', 'trpolag', 'usl'
+    # for num in [8]: 
+    #     for seed in [0,1,2]:
+    #         for algo in ['cpo', 'lpg']:
+    #             python_files_and_args.append((f"{algo}/{algo}.py", f"--epochs 200 --env_num 30 --task Goal_Ant_{num}Hazards_noconti -s {seed}"))
 
-    # 有target_kl的: 'cpo', 'pcpo', 'pdo', 'scpo', 'trpofac', 'trpoipo', 'trpolag'
-    for algo in ['a2c', 'apo', 'ppo', 'trpo']:
-        for seed in [0,1,2]:
-            python_files_and_args.append((f"{algo}/{algo}.py", f"--task Goal_Point_8Hazards_noconti -s {seed}"))
     
+    for env_num in [1200]:
+        for ep_len in [200]:
+            for target_cost in [2, -0.5, -0.2]:
+                python_files_and_args.append(("trpolag/trpolag.py", f"--epochs 200 --max_ep_len {ep_len} --env_num {env_num} --target_cost {target_cost} --task Goal_Ant_8Hazards"))
+
     run(python_files_and_args, [0,1,2,3,4,5,6,7])

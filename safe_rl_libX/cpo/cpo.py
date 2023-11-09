@@ -20,6 +20,7 @@ import os.path as osp
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 EPS = 1e-8
 
+import ipdb; ipdb.set_trace()
 class CPOBufferX:
     """
     A buffer for storing trajectories experienced by a CPO agent interacting
@@ -696,12 +697,10 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         
         
 def create_env(args):
-    # env =  safe_rl_envs_Engine(configuration(args.task))
-    #! TODO: make engine configurable
-    config = {
-        'env_num':args.env_num,
-        '_seed':args.seed,
-        }
+    config = configuration(args.task)
+    config['env_num'] = args.env_num
+    config['num_steps'] = args.max_ep_len
+    # config['device_id'] = args.device_id
     env = safe_rl_envs_Engine(config)
     return env
 
@@ -726,11 +725,16 @@ if __name__ == '__main__':
 
     mpi_fork(args.cpu)  # run parallel code with mpi
     
+    # exp_name = args.task + '_' + args.exp_name \
+    #             + '_' + 'kl' + str(args.target_kl) \
+    #             + '_' + 'target_cost' + str(args.target_cost) \
+    #             + '_' + 'epochs' + str(args.epochs) \
+    #             + '_' + 'step' + str(args.max_ep_len * args.env_num)
     exp_name = args.task + '_' + args.exp_name \
-                + '_' + 'kl' + str(args.target_kl) \
                 + '_' + 'target_cost' + str(args.target_cost) \
                 + '_' + 'epochs' + str(args.epochs) \
-                + '_' + 'step' + str(args.max_ep_len * args.env_num)
+                + '_' + 'epLen' + str(args.max_ep_len)\
+                + '_' + 'envNum' + str(args.env_num)
     logger_kwargs = setup_logger_kwargs(exp_name, args.seed)
 
     # whether to save model

@@ -558,12 +558,12 @@ def trpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         
         
 def create_env(args):
-    # env =  safe_rl_envs_Engine(configuration(args.task))
-    #! TODO: make engine configurable
-    config = {
-        'env_num':args.env_num,
-        '_seed':args.seed,
-        }
+    config = configuration(args.task)
+    config['env_num'] = args.env_num
+    config['num_steps'] = args.max_ep_len
+    config['device_id'] = device.index
+    config['physics_steps_per_control_step'] = 1
+    print(config)
     env = safe_rl_envs_Engine(config)
     return env
 
@@ -586,9 +586,13 @@ if __name__ == '__main__':
 
     mpi_fork(args.cpu)  # run parallel code with mpi 
     
-    exp_name = args.task + '_' + args.exp_name + '_' + 'kl' + str(args.target_kl) \
-                        + '_' + 'epochs' + str(args.epochs) + '_' \
-                        + 'step' + str(args.max_ep_len * args.env_num)
+    # exp_name = args.task + '_' + args.exp_name + '_' + 'kl' + str(args.target_kl) \
+    #                     + '_' + 'epochs' + str(args.epochs) + '_' \
+    #                     + 'step' + str(args.max_ep_len * args.env_num)
+    exp_name = args.task + '_' + args.exp_name \
+            + '_' + 'epochs' + str(args.epochs) \
+            + '_' + 'epLen' + str(args.max_ep_len)\
+            + '_' + 'envNum' + str(args.env_num)
     logger_kwargs = setup_logger_kwargs(exp_name, args.seed)
 
     # whether to save model
