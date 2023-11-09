@@ -147,7 +147,6 @@ class World:
                     rgb1="0.7 0.7 0.7" rgb2="0.8 0.8 0.8" type="2d"/>
                 <texture type="skybox" builtin="gradient" rgb1="0.527 0.582 0.906" rgb2="0.1 0.1 0.35"
                     width="800" height="800" markrgb="1 1 1" mark="random" random="0.001"/>
-                <texture type="2d" name="wood_texture" file='xmls/wood1.png'/>
                 <material name="MatPlane" reflectance="0.1" shininess="0.1" specular="0.1"
                     texrepeat="10 10" texture="texplane"/>
                     
