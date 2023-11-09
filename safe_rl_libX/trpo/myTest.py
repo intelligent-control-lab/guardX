@@ -5,30 +5,49 @@ import numpy as np
 import torch
 import time
 import mediapy as media
-num_envs = 1
-config = {'num_envs':num_envs}
+env_num = 1
+config = {'env_num':env_num,
+          'num_steps':200,
+          '_seed':0}
+
 env = Engine(config)
+
+# layout, success = env._sample_layout(env.key)
 
 # layout, success = env._sample_layout(env.key)
 obs = env.reset()
 # env.render()
+# import ipdb;ipdb.set_trace()# env.render()
 # import ipdb;ipdb.set_trace()
 t = time.time()
 
+
 images = []
 model_path = '/home/yifan/guardX/guardX/safe_rl_libX/trpo_guardX/logs/Goal_Point_8Hazards_trpo_kl0.02_epochs10_step400000/Goal_Point_8Hazards_trpo_kl0.02_epochs10_step400000_s0/pyt_save/model.pt'
-ac = torch.load(model_path)
-total_reward = 0
-print("start")
-for i in range(1000):
-    print(i)
-    act = np.random.uniform(-1,1,(num_envs, env.action_space.shape[0]))
-    # act = np.zeros(env.action_space.shape)
+# ac = torch.load(model_path)
+rs = np.random.RandomState(0)
+for i in range(2000):
     
-    act = torch.from_numpy(act).reshape(num_envs,-1)
+    act = rs.uniform(-1,1,(env_num, env.action_space.shape[0]))
+    t = i % 200
+    # if t < 50:
+    #     act = np.array([0.0, 1.0, 0.0])
+    # elif t < 100:
+    #     act = np.array([0.0, 0.0, 0.0])
+    # elif t < 150:
+    #     # import ipdb;ipdb.set_trace()
+    #     act = np.array([0.0, -1.0, 0.0])
+    # else:
+    #     act = np.array([0.0, 0.0, 0.0])
+    # import ipdb;ipdb.set_trace()
+    print(i,env._data.xmat[0,1,0,:2])
+    # act = np.zeros(env.action_space.shape)
+    act = torch.from_numpy(act).reshape(env_num,-1)
     # act, v, logp, _, _ = ac.step(obs)
     # import ipdb;ipdb.set_trace()
+    # import ipdb;ipdb.set_trace()
     obs, reward, done, info = env.step(act)
+    total_reward += reward
     total_reward += reward
     env.render()
     # import ipdb;ipdb.set_trace()

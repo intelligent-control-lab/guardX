@@ -131,26 +131,59 @@ class World:
             equality['weld'] = []
 
         # Add asset section if missing
-        if 'asset' not in self.xml['mujoco']:
-            # old default rgb1: ".4 .5 .6"
-            # old default rgb2: "0 0 0"
-            # light pink: "1 0.44 .81"
-            # light blue: "0.004 0.804 .996"
-            # light purple: ".676 .547 .996"
-            # med blue: "0.527 0.582 0.906"
-            # indigo: "0.293 0 0.508"
-            asset = xmltodict.parse('''
-                <asset>
-                    <texture type="skybox" builtin="gradient" rgb1="0.527 0.582 0.906" rgb2="0.1 0.1 0.35"
-                        width="800" height="800" markrgb="1 1 1" mark="random" random="0.001"/>
-                    <texture name="texplane" builtin="checker" height="100" width="100"
-                        rgb1="0.7 0.7 0.7" rgb2="0.8 0.8 0.8" type="2d"/>
-                    <material name="MatPlane" reflectance="0.1" shininess="0.1" specular="0.1"
-                        texrepeat="10 10" texture="texplane"/>
-                </asset>
-                ''')
-            self.xml['mujoco']['asset'] = asset['asset']
-
+        # if 'asset' not in self.xml['mujoco']:
+        # old default rgb1: ".4 .5 .6"
+        # old default rgb2: "0 0 0"
+        # light pink: "1 0.44 .81"
+        # light blue: "0.004 0.804 .996"
+        # light purple: ".676 .547 .996"
+        # med blue: "0.527 0.582 0.906"
+        # indigo: "0.293 0 0.508"
+        
+        # <texture type="skybox" gridsize = "3 4" gridlayout = ".U..LFRB.D.." file='xmls/grass2.png'/>
+        asset = xmltodict.parse(f'''
+            <asset>
+                <texture name="texplane" builtin="checker" height="100" width="100"
+                    rgb1="0.7 0.7 0.7" rgb2="0.8 0.8 0.8" type="2d"/>
+                <texture type="skybox" builtin="gradient" rgb1="0.527 0.582 0.906" rgb2="0.1 0.1 0.35"
+                    width="800" height="800" markrgb="1 1 1" mark="random" random="0.001"/>
+                <texture type="2d" name="wood_texture" file='xmls/wood1.png'/>
+                <material name="MatPlane" reflectance="0.1" shininess="0.1" specular="0.1"
+                    texrepeat="10 10" texture="texplane"/>
+                    
+            </asset>
+            ''')
+        xml_path = os.path.dirname(os.path.join(BASE_DIR, self.robot_base))
+        if 'asset' in self.xml['mujoco']:
+            for key, item in self.xml['mujoco']['asset'].items(): 
+                if isinstance(item, list) == 0:
+                    item = [item]
+                for i in item:
+                    if '@file' in i.keys():
+                        path = i['@file']
+                        if key == 'mesh':
+                            new_path = os.path.join(xml_path, self.xml['mujoco']['compiler']['@meshdir'], path)
+                        if key == 'texture':
+                            new_path = os.path.join(xml_path, self.xml['mujoco']['compiler']['@texturedir'], path)
+                        i['@file'] = new_path
+        else:
+            self.xml['mujoco']['asset'] = {}
+        
+        for key, item in asset['asset'].items(): 
+            if isinstance(item, list) == 0:
+                item = [item]
+            for i in item:
+                if '@file' in i.keys():
+                    path = i['@file']
+                    new_path = os.path.join(BASE_DIR, path)
+                    i['@file'] = new_path
+            if key in self.xml['mujoco']['asset'].keys():
+                item2 = self.xml['mujoco']['asset'][key]
+                if isinstance(item2, list) == 0:
+                    item2 = [item2]
+                for i in item2:
+                    item.append(i)
+            self.xml['mujoco']['asset'][key] = item
 
         # Add light to the XML dictionary
         light = xmltodict.parse('''<b>
@@ -196,11 +229,12 @@ class World:
         track_camera = xmltodict.parse('''<b>
             <camera name="track" mode="track" pos="{xp} {yp} {zp}" xyaxes="{x1} {x2} {x3} {y1} {y2} {y3}"/>
             </b>'''.format(**pos, **xyaxes))
+
         worldbody['body'][0]['camera'] = [
             worldbody['body'][0]['camera'],
             track_camera['b']['camera']
             ]
-
+        
 
         # Add objects to the XML dictionary
         for name, object in self.objects.items():
@@ -282,8 +316,8 @@ class World:
             geom['conaffinity'] = geom.get('conaffinity', 1)
             body = xmltodict.parse('''
                 <body name="{name}" pos="{pos}" quat="{quat}">
-                    <joint type="slide" axis="1 0 0" name="{name}_x" damping="0" limited="false"/>
-                    <joint type="slide" axis="0 1 0" name="{name}_y" damping="0" limited="false"/>
+                    <joint type="slide" axis="1 0 0" name="{name}_x" damping="1" limited="false"/>
+                    <joint type="slide" axis="0 1 0" name="{name}_y" damping="1" limited="false"/>
                     <geom name="{name}" type="{type}" size="{size}" rgba="{rgba}" group="{group}"
                         contype="{contype}" conaffinity="{conaffinity}"/>
                 </body>
@@ -295,9 +329,8 @@ class World:
         # Instantiate simulator
         # print(xmltodict.unparse(self.xml, pretty=True))
         self.xml_string = xmltodict.unparse(self.xml)
-        print()
-        with open('result.xml', 'w') as result_file:
-            result_file.write(xmltodict.unparse(self.xml, pretty=True))
+        # with open('result.xml', 'w') as result_file:
+        #     result_file.write(xmltodict.unparse(self.xml, pretty=True))
         self.model = mujoco.MjModel.from_xml_string(self.xml_string)
         # self.sim = MjSim(self.model)
         # Add render contexts to newly created sim
@@ -396,6 +429,7 @@ class Robot:
 
         # Needed to figure out z-height of free joint of offset body
         self.z_height = self.mj_model.body('robot').pos[2]
+        
         # Get a list of geoms in the robot
         # self.geom_names = [n for n in self.sim.model.geom_names if n != 'floor']
         # Needed to figure out the observation spaces

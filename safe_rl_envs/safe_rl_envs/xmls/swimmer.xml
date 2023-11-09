@@ -1,6 +1,6 @@
 <mujoco model="swimmer_tiny">
   <compiler angle="degree"/>
-  <option timestep="0.02"/>
+  <option timestep="0.03"/>
   <size njmax="3000" nconmax="1000"/>
   <default>
     <geom condim="3" density="5.0" friction="0.75 0.01 0.01"  margin="0.01" rgba="1 0 0 1"/>
@@ -16,9 +16,9 @@
       <site name="point2" pos="0.15 0 0"/>
       <camera name="vision" pos=".125 0 .2" xyaxes="0 -1 0 .4 0 1" fovy="100"/>
       <geom name="link_1" density="1000" fromto="0.3 0 0 0.15 0 0" size="0.02" type="capsule"/>
-      <joint axis="1 0 0" name="slider1" pos="0 0 0" type="slide"/>
-      <joint axis="0 1 0" name="slider2" pos="0 0 0" type="slide"/>
-      <joint axis="0 0 1" name="free_body_rot" pos="0 0 0" type="hinge"/>
+      <joint axis="1 0 0" name="robot_x" pos="0 0 0" type="slide"/>
+      <joint axis="0 1 0" name="robot_y" pos="0 0 0" type="slide"/>
+      <joint axis="0 0 1" name="robot_z" pos="0 0 0" type="hinge"/>
       <body name="mid" pos="0.15 0 0">
         <site name="point3" pos="-0.15 0 0"/>
         <geom name="link_2" density="1000" fromto="0 0 0 -0.15 0 0" size="0.02" type="capsule"/>
