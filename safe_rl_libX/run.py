@@ -72,11 +72,19 @@ def run(python_files_and_args, available_devices):
 if __name__ == "__main__":
     python_files_and_args = []
     # 'a2c', 'apo', 'trpo', 'ppo'
-    # 'cpo', 'lpg', 'pcpo', 'pdo', 'safelayer', 'scpo', 'trpofac', 'trpoipo', 'trpolag', 'usl'
-
+    # 'cpo', 'pcpo', 'pdo', 'scpo', 'trpofac', 'trpoipo', 'trpolag',    'usl', 'lpg', 'safelayer'
     # 有target_kl的: 'cpo', 'pcpo', 'pdo', 'scpo', 'trpofac', 'trpoipo', 'trpolag'
-    for algo in ['a2c', 'apo', 'ppo', 'trpo']:
+    
+    # for algo in ['a2c', 'apo', 'ppo', 'trpo']:
+    #     for seed in [0,1,2]:
+    #         python_files_and_args.append((f"{algo}/{algo}.py", f"--task Goal_Point_8Hazards_noconti -s {seed}"))
+            
+    for algo in ['trpolag']:
+        for seed in [2]:
+            python_files_and_args.append((f"{algo}/{algo}.py", f"--task Goal_Ant_8Hazards_noconti -s {seed}"))
+            
+    for algo in ['usl', 'lpg', 'safelayer']:
         for seed in [0,1,2]:
-            python_files_and_args.append((f"{algo}/{algo}.py", f"--task Goal_Point_8Hazards_noconti -s {seed}"))
+            python_files_and_args.append((f"{algo}/{algo}.py", f"--task Goal_Ant_8Hazards_noconti -s {seed}"))
     
     run(python_files_and_args, [0,1,2,3,4,5,6,7])
