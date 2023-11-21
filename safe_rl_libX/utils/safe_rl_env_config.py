@@ -1,3 +1,5 @@
+from safe_rl_envs.envs.engine import Engine as  safe_rl_envs_Engine
+
 def configuration_list(task):
     """
     Configuration for customized environment for safety gym 
@@ -2450,3 +2452,10 @@ def configuration(task):
         config[Type.lower() + '_num'] = N
         return config
     
+def create_env(args):
+    config = configuration(args.task)
+    config['env_num'] = args.env_num
+    config['_seed'] = args.seed
+    config['num_steps'] = args.max_ep_len
+    env = safe_rl_envs_Engine(config)
+    return env

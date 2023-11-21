@@ -13,8 +13,7 @@ import pdo_core as core
 from utils.logx import EpochLogger, setup_logger_kwargs, colorize
 from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
-from safe_rl_envs.envs.engine import Engine as  safe_rl_envs_Engine
-from utils.safe_rl_env_config import configuration
+from utils.safe_rl_env_config import create_env
 import os.path as osp
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -642,17 +641,6 @@ def pdo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
         
-        
-def create_env(args):
-    # env =  safe_rl_envs_Engine(configuration(args.task))
-    #! TODO: make engine configurable
-    config = {
-        'env_num':args.env_num,
-        '_seed':args.seed,
-        }
-    env = safe_rl_envs_Engine(config)
-    return env
-
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
