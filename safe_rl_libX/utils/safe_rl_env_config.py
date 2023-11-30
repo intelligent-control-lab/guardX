@@ -161,6 +161,34 @@ def configuration_list(task):
             'ghosts_safe_dist': 1.5,
         }
 
+    if task == "Goal_Doggo_8Hazards":
+        config = {
+            # robot setting
+            'robot_base': 'xmls/doggo.xml',  
+
+            # task setting
+            'task': 'goal',
+            'goal_size': 0.5,
+
+            # observation setting
+            'observe_goal_comp': True,  # Observe the goal with a lidar sensor
+            'observe_hazards': True,  # Observe the vector from agent to hazards
+            'sensors_obs': ['accelerometer', 'velocimeter', 'gyro', 'magnetometer',
+                            'touch_ankle_1a', 'touch_ankle_2a', 'touch_ankle_3a', 'touch_ankle_4a',
+                            'touch_ankle_1b', 'touch_ankle_2b', 'touch_ankle_3b', 'touch_ankle_4b'],
+
+            # constraint setting
+            'constrain_hazards': True,  # Constrain robot from being in hazardous areas
+            'constrain_indicator': False,  # If true, all costs are either 1 or 0 for a given step. If false, then we get dense cost.
+
+            # lidar setting
+            'lidar_num_bins': 16,
+            
+            # object setting
+            'hazards_num': 8,
+            'hazards_size': 0.3,
+        }
+
     if task == "Goal_Ant_8Hazards":
         config = {
             # robot setting

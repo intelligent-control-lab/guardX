@@ -67,8 +67,8 @@ class CPOBufferX:
         self.mu_buf[:,ptr,:] = mu
         self.logstd_buf[:,ptr,:] = logstd
         self.ptr += 1
-    
-    def finish_path(self, last_val=None, last_cost_val=None, done=None):
+
+    def finish_path(self, last_val=None, last_cost_val=None, first_done_idx=None):
         """
         Call this at the end of a trajectory, or when one gets cut off
         by an epoch ending. This looks back in the buffer to where the
@@ -83,59 +83,35 @@ class CPOBufferX:
         This allows us to bootstrap the reward-to-go calculation to account
         for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
         
-        The "done" argument indicates which environment should be considered
-        for finish_path.
+        The "last_cost_val" argument row entry should be 0 if the trajectory ended
+        because the agent reached a terminal state (died), and otherwise
+        should be VC(s_T), the cost value function estimated for the last state.
+        This allows us to bootstrap the cost-to-go calculation to account
+        for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
+        
+        The "first_done_idx" indicates the first index where episode is finished 
         """ 
-        if np.all(self.path_start_idx == 0) and np.all(self.ptr == self.max_ep_len):
-            # simplest case, all enviroment is done at end batch episode, 
-            # proceed with batch operation
-            if len(last_val.shape) == 1:
-                last_val = last_val.unsqueeze(1)
-            assert last_val.shape == (self.env_num, 1)
-            if len(last_cost_val.shape) == 1:
-                last_cost_val = last_cost_val.unsqueeze(1)
-            assert last_cost_val.shape == (self.env_num, 1)
-            rews = torch.hstack((self.rew_buf, last_val))
-            vals = torch.hstack((self.val_buf, last_val))
-            costs = torch.hstack((self.cost_buf, last_cost_val))
-            cost_vals = torch.hstack((self.cost_val_buf, last_cost_val))
+        # path slice are different for each environment, 
+        # separate treatement is required for each environment
+        assert first_done_idx.shape[0] == self.env_num, 'wrong initialization of first_done_idx, unmatch shape with env_num'
+        for done_env_idx in range(self.env_num):
+            path_slice = slice(self.path_start_idx[done_env_idx], first_done_idx[done_env_idx].cpu().numpy())
+            rews = np.append(self.rew_buf[done_env_idx, path_slice].cpu().numpy(), last_val[done_env_idx].cpu().numpy())
+            vals = np.append(self.val_buf[done_env_idx, path_slice].cpu().numpy(), last_val[done_env_idx].cpu().numpy())
+            costs = np.append(self.cost_buf[done_env_idx, path_slice].cpu().numpy(), last_cost_val[done_env_idx].cpu().numpy())
+            cost_vals = np.append(self.cost_val_buf[done_env_idx, path_slice].cpu().numpy(), last_cost_val[done_env_idx].cpu().numpy())
             
             # the next two lines implement GAE-Lambda advantage calculation
-            deltas = rews[:,:-1] + self.gamma * vals[:,1:] - vals[:,:-1]
-            self.adv_buf = torch.from_numpy(core.batch_discount_cumsum(deltas, self.gamma * self.lam).astype(np.float32)).to(device)
+            deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
+            cost_deltas = costs[:-1] + self.gamma * cost_vals[1:] - cost_vals[:-1]
             
-            # cost advantage calculation
-            cost_deltas = costs[:,:-1] + self.gamma * cost_vals[:,1:] - cost_vals[:,:-1]
-            self.adc_buf = torch.from_numpy(core.batch_discount_cumsum(cost_deltas, self.gamma * self.lam).astype(np.float32)).to(device)
+            self.adv_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(deltas, self.gamma * self.lam).astype(np.float32)).to(device)
+            self.adc_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(cost_deltas, self.gamma * self.lam).astype(np.float32)).to(device)
             
             # the next line computes rewards-to-go, to be targets for the value function
-            self.ret_buf = torch.from_numpy(core.batch_discount_cumsum(rews, self.gamma)[:,:-1].astype(np.float32)).to(device)
-            self.cost_ret_buf = torch.from_numpy(core.batch_discount_cumsum(costs, self.gamma)[:,:-1].astype(np.float32)).to(device)
-            
-        else:
-            # path slice are different for each environment, 
-            # separate treatement is required for each environment
-            done_env_idx_all = np.where(done == 1)[0]
-            for done_env_idx in done_env_idx_all:
-                path_slice = slice(self.path_start_idx[done_env_idx], self.ptr[done_env_idx])
-                rews = np.append(self.rew_buf[done_env_idx, path_slice].cpu().numpy(), last_val[done_env_idx].cpu().numpy())
-                vals = np.append(self.val_buf[done_env_idx, path_slice].cpu().numpy(), last_val[done_env_idx].cpu().numpy())
-                costs = np.append(self.cost_buf[done_env_idx, path_slice].cpu().numpy(), last_cost_val[done_env_idx].cpu().numpy())
-                cost_vals = np.append(self.cost_val_buf[done_env_idx, path_slice].cpu().numpy(), last_cost_val[done_env_idx].cpu().numpy())
-                
-                # the next two lines implement GAE-Lambda advantage calculation
-                deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
-                cost_deltas = costs[:-1] + self.gamma * cost_vals[1:] - cost_vals[:-1]
-                
-                self.adv_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(deltas, self.gamma * self.lam).astype(np.float32)).to(device)
-                self.adc_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(cost_deltas, self.gamma * self.lam).astype(np.float32)).to(device)
-                
-                # the next line computes rewards-to-go, to be targets for the value function
-                self.ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(rews, self.gamma)[:-1].astype(np.float32)).to(device)
-                self.cost_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(costs, self.gamma)[:-1].astype(np.float32)).to(device)
-                
-                self.path_start_idx[done_env_idx] = self.ptr[done_env_idx]
-
+            self.ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(rews, self.gamma)[:-1].astype(np.float32)).to(device)
+            self.cost_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(costs, self.gamma)[:-1].astype(np.float32)).to(device)
+  
     def get(self):
         """
         Call this at the end of an epoch to get all of the data from
@@ -170,7 +146,6 @@ class CPOBufferX:
                     logstd=self.logstd_buf.view(self.env_num * self.max_ep_len, self.logstd_buf.shape[-1]),
         )
         return {k: v for k,v in data.items()}
-
 
 def get_net_param_np_vec(net):
     """
@@ -450,7 +425,6 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         EpCost = logger.get_stats('EpCost')[0]
         
         # cost constraint linearization
-         
         c = EpCost - target_cost 
         rescale  = EpLen
         c /= (rescale + EPS)
@@ -461,103 +435,142 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # q        = np.clip(Hinv_g.T @ approx_g, 0.0, None)  # g.T / H @ g
         q        = Hinv_g.T @ approx_g
         
-        # solve QP
-        # decide optimization cases (feas/infeas, recovery)
-        # Determine optim_case (switch condition for calculation,
-        # based on geometry of constrained optimization problem)
-        if b.T @ b <= 1e-8 and c < 0:
-            Hinv_b, r, s, A, B = 0, 0, 0, 0, 0
-            optim_case = 4
+        # determine if valid cost values are observed 
+        if abs(EpCost) < 1e-20:
+            print(colorize(f'No valid cost, continue with TRPO update.'%j, 'green', bold=True))
+            
+            # policy gradient direction for TRPO update 
+            x_hat    = cg(Hx, g)             # Hinv_g = H \ g
+            s = x_hat.T @ Hx(x_hat)
+            x_direction = np.sqrt(2 * target_kl / (s+EPS)) * x_hat
+            
+            # copy an actor to conduct line search 
+            actor_tmp = copy.deepcopy(ac.pi)
+            def set_and_eval(step):
+                new_param = get_net_param_np_vec(ac.pi) - step * x_direction
+                assign_net_param_from_flat(new_param, actor_tmp)
+                kl = compute_kl_pi(data, actor_tmp)
+                pi_l, _ = compute_loss_pi(data, actor_tmp)
+                surr_cost = compute_cost_pi(data, actor_tmp)
+                
+                return kl, pi_l, surr_cost
+            
+            # update the policy such that the KL diveragence constraints are satisfied and loss is decreasing
+            for j in range(backtrack_iters):
+                try:
+                    kl, pi_l_new, surr_cost_new = set_and_eval(backtrack_coeff**j)
+                except:
+                    import ipdb; ipdb.set_trace()
+                
+                if (kl.item() <= target_kl and pi_l_new.item() <= pi_l_old):
+                    print(colorize(f'Accepting new params at step %d of line search.'%j, 'green', bold=False))
+                    # update the policy parameter 
+                    new_param = get_net_param_np_vec(ac.pi) - backtrack_coeff**j * x_direction
+                    assign_net_param_from_flat(new_param, ac.pi)
+                    loss_pi, pi_info = compute_loss_pi(data, ac.pi) # re-evaluate the pi_info for the new policy
+                    surr_cost = compute_cost_pi(data, ac.pi) # re-evaluate the surr_cost for the new policy
+                    break
+                if j==backtrack_iters-1:
+                    print(colorize(f'Line search failed! Keeping old params.', 'yellow', bold=False))
         else:
-            # cost grad is nonzero: CPO update!
-            Hinv_b = cg(Hx, b)                # H^{-1} b
-            r = Hinv_b.T @ approx_g          # b^T H^{-1} g
-            s = Hinv_b.T @ Hx(Hinv_b)        # b^T H^{-1} b
-            A = q - r**2 / s            # should be always positive (Cauchy-Shwarz)
-            B = 2*target_kl - c**2 / s  # does safety boundary intersect trust region? (positive = yes)
-
-            # c < 0: feasible
-
-            if c < 0 and B < 0:
-                # point in trust region is feasible and safety boundary doesn't intersect
-                # ==> entire trust region is feasible
-                optim_case = 3
-            elif c < 0 and B >= 0:
-                # x = 0 is feasible and safety boundary intersects
-                # ==> most of trust region is feasible
-                optim_case = 2
-            elif c >= 0 and B >= 0:
-                # x = 0 is infeasible and safety boundary intersects
-                # ==> part of trust region is feasible, recovery possible
-                optim_case = 1
-                print(colorize(f'Alert! Attempting feasible recovery!', 'yellow', bold=True))
+            print(colorize(f'Valid cost detected, continue with CPO update.', 'green', bold=True))
+            # solve QP
+            # decide optimization cases (feas/infeas, recovery)
+            # Determine optim_case (switch condition for calculation,
+            # based on geometry of constrained optimization problem)
+            if b.T @ b <= 1e-8 and c < 0:
+                Hinv_b, r, s, A, B = 0, 0, 0, 0, 0
+                optim_case = 4
             else:
-                # x = 0 infeasible, and safety halfspace is outside trust region
-                # ==> whole trust region is infeasible, try to fail gracefully
-                optim_case = 0
-                print(colorize(f'Alert! Attempting INFEASIBLE recovery!', 'red', bold=True))
-        
-        print(colorize(f'optim_case: {optim_case}', 'magenta', bold=True))
-        
-        
-        # get optimal theta-theta_k direction
-        if optim_case in [3,4]:
-            lam = np.sqrt(q / (2*target_kl))
-            nu = 0
-        elif optim_case in [1,2]:
-            LA, LB = [0, r /c], [r/c, np.inf]
-            LA, LB = (LA, LB) if c < 0 else (LB, LA)
-            proj = lambda x, L : max(L[0], min(L[1], x))
-            lam_a = proj(np.sqrt(A/B), LA)
-            lam_b = proj(np.sqrt(q/(2*target_kl)), LB)
-            f_a = lambda lam : -0.5 * (A / (lam+EPS) + B * lam) - r*c/(s+EPS)
-            f_b = lambda lam : -0.5 * (q / (lam+EPS) + 2 * target_kl * lam)
-            lam = lam_a if f_a(lam_a) >= f_b(lam_b) else lam_b
-            # nu = max(0, lam * c - r) / (np.clip(s,0.,None)+EPS)
-            nu = max(0, lam * c - r) / (s+EPS)
-        else:
-            lam = 0
-            # nu = np.sqrt(2 * target_kl / (np.clip(s,0.,None)+EPS))
-            nu = np.sqrt(2 * target_kl / (s+EPS))
+                # cost grad is nonzero: CPO update!
+                Hinv_b = cg(Hx, b)                # H^{-1} b
+                r = Hinv_b.T @ approx_g          # b^T H^{-1} g
+                s = Hinv_b.T @ Hx(Hinv_b)        # b^T H^{-1} b
+                A = q - r**2 / s            # should be always positive (Cauchy-Shwarz)
+                B = 2*target_kl - c**2 / s  # does safety boundary intersect trust region? (positive = yes)
+
+                # c < 0: feasible
+
+                if c < 0 and B < 0:
+                    # point in trust region is feasible and safety boundary doesn't intersect
+                    # ==> entire trust region is feasible
+                    optim_case = 3
+                elif c < 0 and B >= 0:
+                    # x = 0 is feasible and safety boundary intersects
+                    # ==> most of trust region is feasible
+                    optim_case = 2
+                elif c >= 0 and B >= 0:
+                    # x = 0 is infeasible and safety boundary intersects
+                    # ==> part of trust region is feasible, recovery possible
+                    optim_case = 1
+                    print(colorize(f'Alert! Attempting feasible recovery!', 'yellow', bold=True))
+                else:
+                    # x = 0 infeasible, and safety halfspace is outside trust region
+                    # ==> whole trust region is infeasible, try to fail gracefully
+                    optim_case = 0
+                    print(colorize(f'Alert! Attempting INFEASIBLE recovery!', 'red', bold=True))
             
-        # normal step if optim_case > 0, but for optim_case =0,
-        # perform infeasible recovery: step to purely decrease cost
-        x_direction = (1./(lam+EPS)) * (Hinv_g + nu * Hinv_b) if optim_case > 0 else nu * Hinv_b
-        
-        # copy an actor to conduct line search 
-        actor_tmp = copy.deepcopy(ac.pi)
-        def set_and_eval(step):
-            new_param = get_net_param_np_vec(ac.pi) - step * x_direction
-            assign_net_param_from_flat(new_param, actor_tmp)
-            kl = compute_kl_pi(data, actor_tmp)
-            pi_l, _ = compute_loss_pi(data, actor_tmp)
-            surr_cost = compute_cost_pi(data, actor_tmp)
+            print(colorize(f'optim_case: {optim_case}', 'magenta', bold=True))
             
-            return kl, pi_l, surr_cost
-        
-        # update the policy such that the KL diveragence constraints are satisfied and loss is decreasing
-        for j in range(backtrack_iters):
-            try:
-                kl, pi_l_new, surr_cost_new = set_and_eval(backtrack_coeff**j)
-            except:
-                import ipdb; ipdb.set_trace()
             
-            if (kl.item() <= target_kl and
-                (pi_l_new.item() <= pi_l_old if optim_case > 1 else True) and # if current policy is feasible (optim>1), must preserve pi loss
-                # surr_cost_new - surr_cost_old <= max(-c,0)):
-                surr_cost_new - surr_cost_old <= max(-c,-cost_reduction)):
+            # get optimal theta-theta_k direction
+            if optim_case in [3,4]:
+                lam = np.sqrt(q / (2*target_kl))
+                nu = 0
+            elif optim_case in [1,2]:
+                LA, LB = [0, r /c], [r/c, np.inf]
+                LA, LB = (LA, LB) if c < 0 else (LB, LA)
+                proj = lambda x, L : max(L[0], min(L[1], x))
+                lam_a = proj(np.sqrt(A/B), LA)
+                lam_b = proj(np.sqrt(q/(2*target_kl)), LB)
+                f_a = lambda lam : -0.5 * (A / (lam+EPS) + B * lam) - r*c/(s+EPS)
+                f_b = lambda lam : -0.5 * (q / (lam+EPS) + 2 * target_kl * lam)
+                lam = lam_a if f_a(lam_a) >= f_b(lam_b) else lam_b
+                # nu = max(0, lam * c - r) / (np.clip(s,0.,None)+EPS)
+                nu = max(0, lam * c - r) / (s+EPS)
+            else:
+                lam = 0
+                # nu = np.sqrt(2 * target_kl / (np.clip(s,0.,None)+EPS))
+                nu = np.sqrt(2 * target_kl / (s+EPS))
                 
-                print(colorize(f'Accepting new params at step %d of line search.'%j, 'green', bold=False))
+            # normal step if optim_case > 0, but for optim_case =0,
+            # perform infeasible recovery: step to purely decrease cost
+            x_direction = (1./(lam+EPS)) * (Hinv_g + nu * Hinv_b) if optim_case > 0 else nu * Hinv_b
+            
+            # copy an actor to conduct line search 
+            actor_tmp = copy.deepcopy(ac.pi)
+            def set_and_eval(step):
+                new_param = get_net_param_np_vec(ac.pi) - step * x_direction
+                assign_net_param_from_flat(new_param, actor_tmp)
+                kl = compute_kl_pi(data, actor_tmp)
+                pi_l, _ = compute_loss_pi(data, actor_tmp)
+                surr_cost = compute_cost_pi(data, actor_tmp)
                 
-                # update the policy parameter 
-                new_param = get_net_param_np_vec(ac.pi) - backtrack_coeff**j * x_direction
-                assign_net_param_from_flat(new_param, ac.pi)
+                return kl, pi_l, surr_cost
+            
+            # update the policy such that the KL diveragence constraints are satisfied and loss is decreasing
+            for j in range(backtrack_iters):
+                try:
+                    kl, pi_l_new, surr_cost_new = set_and_eval(backtrack_coeff**j)
+                except:
+                    import ipdb; ipdb.set_trace()
                 
-                loss_pi, pi_info = compute_loss_pi(data, ac.pi) # re-evaluate the pi_info for the new policy
-                surr_cost = compute_cost_pi(data, ac.pi) # re-evaluate the surr_cost for the new policy
-                break
-            if j==backtrack_iters-1:
-                print(colorize(f'Line search failed! Keeping old params.', 'yellow', bold=False))
+                if (kl.item() <= target_kl and
+                    (pi_l_new.item() <= pi_l_old if optim_case > 1 else True) and # if current policy is feasible (optim>1), must preserve pi loss
+                    # surr_cost_new - surr_cost_old <= max(-c,0)):
+                    surr_cost_new - surr_cost_old <= max(-c,-cost_reduction)):
+                    
+                    print(colorize(f'Accepting new params at step %d of line search.'%j, 'green', bold=False))
+                    
+                    # update the policy parameter 
+                    new_param = get_net_param_np_vec(ac.pi) - backtrack_coeff**j * x_direction
+                    assign_net_param_from_flat(new_param, ac.pi)
+                    
+                    loss_pi, pi_info = compute_loss_pi(data, ac.pi) # re-evaluate the pi_info for the new policy
+                    surr_cost = compute_cost_pi(data, ac.pi) # re-evaluate the surr_cost for the new policy
+                    break
+                if j==backtrack_iters-1:
+                    print(colorize(f'Line search failed! Keeping old params.', 'yellow', bold=False))
 
         # Value function learning
         for i in range(train_v_iters):
@@ -587,16 +600,18 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     start_time = time.time()
     
     o = env.reset()
-    ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
+    ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num)
     cum_cost = 0 
-    
-    max_ep_len_ret = np.zeros(env_num)
+    # initialize the done maintainer 
+    first_done_idx = torch.zeros(env_num, dtype=torch.int16)
     
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         t_epoch = time.time()
         for t in range(max_ep_len):
             t_step = time.time()
+            o[o.isnan()] = 0
+            o[o.isinf()] = 0
             a, v, vc, logp, mu, logstd = ac.step(torch.as_tensor(o, dtype=torch.float32))
             t_policy_step = time.time() - t_step
             t_step = time.time()
@@ -604,70 +619,83 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             t_env_step = time.time() - t_step
             t_step = time.time()
             assert 'cost' in info.keys()
-   
-            # Track cumulative cost over training
-            cum_cost += info['cost'].cpu().numpy().squeeze().sum()
-            ep_ret += r.cpu().numpy().squeeze()
-            max_ep_len_ret += r.cpu().numpy().squeeze()
-            ep_cost_ret += info['cost'].cpu().numpy().squeeze() * (gamma ** t)
-            ep_len += 1
+
             
+            #-------------------------------------------
+            # Stop log if first done already exists 
+            #-------------------------------------------
+            # valid cost, ret, computation 
+            cost_valid = torch.zeros(info['cost'].shape)
+            r_valid = torch.zeros(r.shape)
+            # only cost and reward are valid only where episode is not done
+            cost_valid = torch.where(first_done_idx > 0, 0, info['cost'].cpu())
+            r_valid = torch.where(first_done_idx > 0, 0, r.cpu())
+        
+            # Track cumulative cost over training
+            # update return, length, cost of env_num batch episodes
+            cum_cost += cost_valid.cpu().numpy().squeeze().sum()
+            ep_ret += r_valid.cpu().numpy().squeeze()
+            ep_len += 1
             assert ep_cost.shape == info['cost'].cpu().numpy().squeeze().shape
-            ep_cost += info['cost'].cpu().numpy().squeeze()
+            ep_cost += cost_valid.cpu().numpy().squeeze()
             
             # save and log
             buf.store(o, a, r, v, logp, info['cost'], vc, mu, logstd)
             logger.store(VVals=v.cpu().numpy())
             
+            
+            #-------------------------------------------
+            # Update the done log 
+            #-------------------------------------------
+            done = d.cpu().numpy() # done indicators for certain environments
+            cur_done_idx = first_done_idx[np.where(done == 1)]
+            # udpate the first done idx if it is zero, otherwise, keep it as the first log
+            if cur_done_idx.shape[0] > 0: 
+                # there is some environment done 
+                first_done_idx[np.where(done == 1)] = torch.where(cur_done_idx > 0, cur_done_idx, t+1) # done after (t+1) step, starting from (t+1) = 1,2,3,...
+
+            
             # Update obs (critical!)
             o = next_o
-                        
+                     
+            # timeout when maximum episode length is reached    
             timeout = (t + 1) == max_ep_len
-            terminal = d.cpu().numpy().any() > 0 or timeout
+            if timeout:
+                # one episode implementation, environment will directly run until maximum episode length
+                # already done environment has no bootstrap, non-done environment will use bootstrap 
+                # filter nan rows 
+                o_valid = o
+                rows_without_nan = ~torch.isnan(o_valid).any(dim=1)
+                o_valid = o_valid[rows_without_nan]
+                rows_without_inf = ~torch.isinf(o_valid).any(dim=1)
+                o_valid = o_valid[rows_without_inf]
+                _, v_boostrap, vc_bootstrap, _, _, _ = ac.step(torch.as_tensor(o_valid, dtype=torch.float32))
+                # set 0 for bootstrap value for nan environment  
+                v = torch.zeros(o.shape[0])
+                vc = torch.zeros(o.shape[0])
+                v[rows_without_nan] = v_boostrap.cpu()
+                vc[rows_without_nan] = vc_bootstrap.cpu()
+                
+                # set only none-done environment needs boostrap, otherwise, v = 0 
+                v = torch.where(first_done_idx > 0, 0, v)
+                vc = torch.where(first_done_idx > 0, 0, vc)
+                
+                # directly set non-done environment index as the maximum episode length 
+                first_done_idx = torch.where(first_done_idx > 0, first_done_idx, t+1) # done after (t+1) step, starting from (t+1) = 1,2,3,...
 
-            if terminal:
-                # if trajectory didn't reach terminal state, bootstrap value target
-                if timeout:
-                    o = env.reset()
-                    try:
-                        _, v, vc, _, _, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
-                    except:
-                        import ipdb;ipdb.set_trace()
-                    done = np.ones(env_num) # every environment needs to finish path
-                    # no bootstrap for timeout and done environment 
-                    v[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0]).to(device)
-                    vc[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0]).to(device)
-                    
-                    logger.store(EpRet=ep_ret[np.where(ep_len == max_ep_len)],
-                                 EpLen=ep_len[np.where(ep_len == max_ep_len)],
-                                 EpCostRet=ep_cost_ret[np.where(ep_len == max_ep_len)],
-                                 EpCost=ep_cost[np.where(ep_len == max_ep_len)])
-                    logger.store(MaxEpLenRet=max_ep_len_ret)
-                    buf.finish_path(v, vc, done)
-                    # reset environment 
-                    o = env.reset()
-                    ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
-                    max_ep_len_ret = np.zeros(env_num)
-                else:
-                    # trajectory finished for some environment
-                    done = d.cpu().numpy() # finish path for certain environments
-                    v[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0]).to(device)
-                    vc[np.where(done == 1)] = torch.zeros(np.where(done == 1)[0].shape[0]).to(device)
-                    
-                    logger.store(EpRet=ep_ret[np.where(done == 1)], 
-                                 EpLen=ep_len[np.where(done == 1)],
-                                 EpCostRet=ep_cost_ret[np.where(done == 1)], 
-                                 EpCost=ep_cost[np.where(done == 1)])
-                    ep_ret[np.where(done == 1)], ep_len[np.where(done == 1)], ep_cost[np.where(done == 1)], ep_cost_ret[np.where(done == 1)]\
-                        =   np.zeros(np.where(done == 1)[0].shape[0]), \
-                            np.zeros(np.where(done == 1)[0].shape[0]), \
-                            np.zeros(np.where(done == 1)[0].shape[0]), \
-                            np.zeros(np.where(done == 1)[0].shape[0])
-                    
-                    buf.finish_path(v, vc, done)
-                       
-                    # only reset observations for those done environments 
-                    o = env.reset_done()
+                # finish path 
+                buf.finish_path(v, vc, first_done_idx)
+                
+                # log information 
+                logger.store(EpRet=ep_ret, 
+                             EpLen=first_done_idx.cpu().numpy(), 
+                             EpCost=ep_cost)
+                
+                # reset environment 
+                o = env.reset()
+                ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num)
+                first_done_idx = torch.zeros(o.shape[0], dtype=torch.int16)
+                
             t_other_step = time.time() - t_step 
             logger.store(TPolicy=t_policy_step)
             logger.store(TEnv=t_env_step)
@@ -689,8 +717,6 @@ def cpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', average_only=True)
-        logger.log_tabular('MaxEpLenRet', average_only=True)
-        logger.log_tabular('EpCostRet', average_only=True)
         logger.log_tabular('EpCost', average_only=True)
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
@@ -746,5 +772,3 @@ if __name__ == '__main__':
         seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
         logger_kwargs=logger_kwargs, target_cost=args.target_cost, 
         model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction)
-    
-    # CUDA_VISBLE_DEVICES=1 python cpo.py --model_save --task Goal_Walker_8Hazards --env_num 4000 --max_ep_len 200 --epochs 200 --target_cost -0.05

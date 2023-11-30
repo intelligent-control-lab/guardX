@@ -3,33 +3,34 @@
   <size njmax="3000" nconmax="1000"/>
   <default>
     <joint armature="1" damping="20" limited="true"/>
-    <geom condim="3" density="500" friction=".7 .1 .1" rgba="1 0 0  1"/>
+    <geom condim="3" density="50.0" friction="0.75 0.01 0.01" rgba="1 0 0  1" contype="0" conaffinity="0"/>
     <site size="0.05" type="sphere" rgba="0 0 1 0"/>
   </default>
   <option timestep="0.02"/>
   <worldbody>
-    <geom name="floor" size="5 5 0.1" type="plane" condim="3"/>
-    <body name="robot" pos="0 0 0.43">
+    <geom name="floor" size="5 5 0.1" type="plane" conaffinity="1" condim="3"/>
+    <body name="robot" pos="0 0 0.42">
       <site name="robot" rgba="1 0 0 .1"/>
       <camera name="vision" pos=".125 0 .2" xyaxes="0 -1 0 .4 0 1" fovy="100"/>
       <!-- <joint armature="0" damping="0" limited="false" margin="0.01" name="root" pos="0 0 0" type="free"/> -->
-      <joint armature="0" axis="1 0 0" damping="5" limited="false" name="robot_x" pos="0 0 0" stiffness="0" type="slide"/>
+      <joint armature="0" axis="1 0 0" damping="10" limited="false" name="robot_x" pos="0 0 0" stiffness="0" type="slide"/>
       <joint armature="0" axis="0 0 1" damping="1" limited="false" name="robot_z" pos="0 0 0" stiffness="0.1" type="hinge"/>
-      <joint armature="0" axis="0 1 0" damping="5" limited="false" name="robot_y" pos="0 0 0" stiffness="0" type="slide"/>
+      <joint armature="0" axis="0 1 0" damping="10" limited="false" name="robot_y" pos="0 0 0" stiffness="0" type="slide"/>
       
-      <geom friction="0.9" fromto="0 0.1 0 0 -0.1 0" name="robot_geom" size="0.03" type="capsule"/>
+      <geom   fromto="0 0.1 0 0 -0.1 0" name="robot_geom" size="0.03" type="capsule"/>
       <body name="right_thigh" pos="0 0.1 0">
         <!-- <joint axis="0 -1 0" name="thigh_joint" pos="0 0 0" range="-150 10" type="hinge"/> -->
         <joint armature="0.01" axis="1 0 0" damping="5" name="right_hip_x" pos="0 0 0" range="-25 5" stiffness="10" type="hinge"/>
         <joint armature="0.01" axis="0 0 1" damping="5" name="right_hip_z" pos="0 0 0" range="-30 35" stiffness="10" type="hinge"/>
         <joint armature="0.01" axis="0 1 0" damping="5" name="right_hip_y" pos="0 0 0" range="-100 10" stiffness="10" type="hinge"/>
-        <geom friction="0.9" fromto="0 0 0 0 0 -0.2" name="right_thigh_geom" size="0.03" type="capsule"/>
+        <geom   fromto="0 0 0 0 0 -0.2" name="right_thigh_geom" size="0.03" type="capsule"/>
         <body name="right_leg" pos="0 0 -0.3">
           <joint axis="0 -1 0" name="right_leg_joint" pos="0 0 0.1" range="-100 0" type="hinge"/>
-          <geom friction="0.9" fromto="0 0 0.1 0 0 -0.1" name="right_leg_geom" size="0.02" type="capsule"/>
+          <geom   fromto="0 0 0.1 0 0 -0.1" name="right_leg_geom" size="0.02" type="capsule"/>
           <body name="right_foot" pos="0.0 0.0 0.0">
             <joint axis="0 -1 0" name="right_foot_joint" pos="0.0 0.0 -0.1" range="-45 20" type="hinge"/>
             <geom friction="2.0" fromto="0.0 0.0 -0.1 0.05 0.0 -0.1" name="right_foot_geom" size="0.03" type="capsule"/>
+            <geom type="sphere" pos="0.05 0.0 -0.1" size="0.02" contype="1" conaffinity="0" />
             <site name="right_foot" pos="0.05 0 -0.1"/>
           </body>
         </body>
@@ -40,13 +41,14 @@
         <joint armature="0.01" axis="-1 0 0" damping="5" name="left_hip_x" pos="0 0 0" range="-25 5" stiffness="10" type="hinge"/>
         <joint armature="0.01" axis="0 0 -1" damping="5" name="left_hip_z" pos="0 0 0" range="-30 35" stiffness="10" type="hinge"/>
         <joint armature="0.01" axis="0 1 0" damping="5" name="left_hip_y" pos="0 0 0" range="-100 10" stiffness="10" type="hinge"/>
-        <geom friction="0.9" fromto="0 0 0 0 0 -0.2" name="left_thigh_geom" size="0.03" type="capsule"/>
+        <geom   fromto="0 0 0 0 0 -0.2" name="left_thigh_geom" size="0.03" type="capsule"/>
         <body name="left_leg" pos="0 0 -0.3">
           <joint axis="0 -1 0" name="left_leg_joint" pos="0 0 0.1" range="-100 0" type="hinge"/>
-          <geom friction="0.9" fromto="0 0 0.1 0 0 -0.1" name="left_leg_geom" size="0.02" type="capsule"/>
+          <geom   fromto="0 0 0.1 0 0 -0.1" name="left_leg_geom" size="0.02" type="capsule"/>
           <body name="left_foot" pos="0.0 0.0 0.0">
             <joint axis="0 -1 0" name="left_foot_joint" pos="0.0 0.0 -0.1" range="-45 20" type="hinge"/>
             <geom friction="2.0" fromto="0.0 0.0 -0.1 0.05 0.0 -0.1" name="left_foot_geom" size="0.03" type="capsule"/>
+            <geom type="sphere" pos="0.05 0.0 -0.1" size="0.02" contype="1" conaffinity="0" />
             <site name="left_foot" pos="0.05 0 -0.1"/>
           </body>
         </body>

@@ -1,22 +1,24 @@
 <mujoco model="ant_tiny">
-  <option timestep="0.05"/>
+  <option timestep="0.09"/>
   <size njmax="3000" nconmax="1000"/>
   <default>
     <joint armature="1" damping="1" limited="true"/>
-    <geom condim="3" density="5.0" friction="0.75 0.01 0.01"  margin="0.01" rgba="1 0 0 1"/>
-    <motor  ctrllimited="true" ctrlrange="-1.0 1.0" gear="50"/>
+    <geom condim="3" density="5.0" friction="0.75 0.01 0.01"  margin="0.01" rgba="1 0 0 1" contype="0" conaffinity="0"/>
+    <motor  ctrllimited="true" ctrlrange="-1.0 1.0" gear="70"/>
     <site size="0.2" type="sphere" rgba="0 0 1 0"/>
   </default>
   
   <worldbody>
     
-    <geom name="floor" size="5 5 0.1" type="plane" condim="3"/>
+    <geom name="floor" size="5 5 0.1" conaffinity="1" type="plane" condim="3"/>
 
-    <body name="robot" pos="0 0 0.75">
+    <body name="robot" pos="0 0 0.15">
       <site name="robot" rgba="1 0 0 .01"/>
       <camera name="vision" pos=".125 0 .2" xyaxes="0 -1 0 .4 0 1" fovy="100"/>
       <geom name="robot" pos="0 0 0" size="0.06" type="sphere"/>
-      <joint armature="0" damping="0" limited="false" margin="0.01" name="robot" pos="0 0 0" type="free"/>
+      <joint armature="0" axis="1 0 0" damping="0.1" limited="false" name="robot_x" pos="0 0 0" stiffness="0" type="slide"/>
+      <joint armature="0" axis="0 0 1" damping="0.01" limited="false" name="robot_z" pos="0 0 0" stiffness="0.1" type="hinge"/>
+      <joint armature="0" axis="0 1 0" damping="0.1" limited="false" name="robot_y" pos="0 0 0" stiffness="0" type="slide"/>
       <body name="front_left_leg" pos="0 0 0">
         <geom fromto="0.0 0.0 0.0 0.05 0.05 0.0" name="aux_1_geom" size="0.02" type="capsule"/>
         <body name="aux_1" pos="0.05 0.05 0">
@@ -25,6 +27,7 @@
           <body pos="0.05 0.05 0">
             <joint axis="-1 1 0" name="ankle_1" pos="0.0 0.0 0.0" range="30 70" type="hinge"/>
             <geom fromto="0.0 0.0 0.0 0.1 0.1 0.0" name="front_left_ankle_geom" size="0.02" type="capsule"/>
+            <geom type="sphere" pos="0.1 0.1 0.0" size="0.02" contype="1" conaffinity="0" />
             <site name="ankle_1a" pos="0 0 0"/>
             <site name="ankle_1b" pos="0.1 0.1 0.0"/>
           </body>
@@ -39,6 +42,7 @@
           <body pos="-0.05 0.05 0">
             <joint axis="1 1 0" name="ankle_2" pos="0.0 0.0 0.0" range="-70 -30" type="hinge"/>
             <geom fromto="0.0 0.0 0.0 -0.1 0.1 0.0" name="front_right_ankle_geom" size="0.02" type="capsule"/>
+            <geom type="sphere" pos="-0.1 0.1 0.0" size="0.02" contype="1" conaffinity="0" />
             <site name="ankle_2a" pos="0 0 0"/>
             <site name="ankle_2b" pos="-0.1 0.1 0.0"/>
           </body>
@@ -53,6 +57,7 @@
           <body pos="-0.05 -0.05 0">
             <joint axis="-1 1 0" name="ankle_3" pos="0.0 0.0 0.0" range="-70 -30" type="hinge"/>
             <geom fromto="0.0 0.0 0.0 -0.1 -0.1 0.0" name="back_left_ankle_geom" size="0.02" type="capsule"/>
+            <geom type="sphere" pos="-0.1 -0.1 0.0" size="0.02" contype="1" conaffinity="0" />
             <site name="ankle_3a" pos="0 0 0"/>
             <site name="ankle_3b" pos="-0.1 -0.1 0.0"/>
           </body>
@@ -65,7 +70,8 @@
           <geom fromto="0.0 0.0 0.0 0.05 -0.05 0.0" name="back_right_leg_geom" size="0.02" type="capsule"/>
           <body pos="0.05 -0.05 0">
             <joint axis="1 1 0" name="ankle_4" pos="0.0 0.0 0.0" range="30 70" type="hinge"/>
-            <geom fromto="0.0 0.0 0.0 0.1 -0.1 0.0" name="back_right_ankle_geom" size="0.02" type="capsule"/>
+            <geom fromto="0.0 0.0 0.0 0.1 -0.1 0.0" name="back_right_ankle_geom" size="0.02" type="capsule" />
+            <geom type="sphere" pos="0.1 -0.1 0.0" size="0.02" contype="1" conaffinity="0" />
             <site name="ankle_4a" pos="0 0 0"/>
             <site name="ankle_4b" pos="0.1 -0.1 0.0"/>
           </body>

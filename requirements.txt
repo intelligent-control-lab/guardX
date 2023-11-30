@@ -2,5 +2,7 @@ gym
 torch
 mujoco
 mujoco_mjx
-jax
 mediapy
+joblib
+mpi4py
+xmltodict

@@ -194,7 +194,7 @@ class World:
         # Add floor to the XML dictionary if missing
         if not any(g.get('@name') == 'floor' for g in worldbody['geom']):
             floor = xmltodict.parse('''
-                <geom name="floor" type="plane" condim="3"/>
+                <geom name="floor" type="plane" condim="3" conaffinity="1"/>
                 ''')
             worldbody['geom'].append(floor['geom'])
 
@@ -328,8 +328,8 @@ class World:
         # Instantiate simulator
         # print(xmltodict.unparse(self.xml, pretty=True))
         self.xml_string = xmltodict.unparse(self.xml)
-        # with open('result.xml', 'w') as result_file:
-        #     result_file.write(xmltodict.unparse(self.xml, pretty=True))
+        with open('result.xml', 'w') as result_file:
+            result_file.write(xmltodict.unparse(self.xml, pretty=True))
         self.model = mujoco.MjModel.from_xml_string(self.xml_string)
         # self.sim = MjSim(self.model)
         # Add render contexts to newly created sim

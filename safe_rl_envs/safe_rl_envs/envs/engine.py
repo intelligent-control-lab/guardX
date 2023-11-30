@@ -495,6 +495,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
     
     def reset_done(self):
         # self.reset_layout()
+        # import ipdb;ipdb.set_trace()
         layout = self.get_layout()
         obs, self._data = self._reset_done(self._data,
                                             self._done,
@@ -690,6 +691,10 @@ class Engine(gym.Env, gym.utils.EzPickle):
         info = {}
         info['cost'] = cost
         info['obs'] = obs_dict
+        reward = jp.where(jp.isnan(obs).any() > 0, x = 0, y = reward)
+        done = jp.where(jp.isnan(obs).any() > 0, x = 1, y = done)
+        reward = jp.where(jp.isinf(obs).any() > 0, x = 0, y = reward)
+        done = jp.where(jp.isinf(obs).any() > 0, x = 1, y = done)
         return obs, reward, done, info, data
     
     def mjx_reset_done(self,
@@ -709,7 +714,6 @@ class Engine(gym.Env, gym.utils.EzPickle):
             ctrl = jp.where(done > 0.0, x = ctrl_reset, y = data.ctrl)
             qvel = jp.where(done > 0.0, x = qvel_reset, y = data.qvel)
             data = data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
-            # data_reset = self.one_step(data)
             def f(data, _):   
                 return (
                         mjx.step(self.mjx_model, data),
@@ -787,8 +791,12 @@ class Engine(gym.Env, gym.utils.EzPickle):
         last_dist_goal = dist_goal
         if last_done is not None:
             last_dist_goal = jp.where(last_done > 0.0, x = self.goal_pos(data), y = self.goal_pos(last_data))
-        reward = (last_dist_goal - dist_goal) * self.reward_distance
+        d_dist = last_dist_goal - dist_goal
+        reward = d_dist * self.reward_distance
         done = jp.where(dist_goal < self.goal_size, x = 1.0, y = 0.0)
+        # filter the invalid simulation of the robot
+        done = jp.where(abs(d_dist) > 1.0, x = 1.0, y = done)
+        reward = jp.where(abs(d_dist) > 1.0, x = 0, y = reward)
         return reward, done
     
     def cost(self, data: mjx.Data) -> jp.ndarray:

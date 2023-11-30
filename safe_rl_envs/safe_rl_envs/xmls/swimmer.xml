@@ -3,29 +3,29 @@
   <option timestep="0.03"/>
   <size njmax="3000" nconmax="1000"/>
   <default>
-    <geom condim="3" density="5.0" friction="0.75 0.01 0.01"  margin="0.01" rgba="1 0 0 1"/>
+    <geom condim="3" density="5.0" friction="0.75 0.01 0.01"  margin="0.01" rgba="1 0 0 1" contype="0" conaffinity="0"/>
     <joint armature='0.1'  />
     <site size="0.1" type="sphere" rgba="0 0 1 0"/>
   </default>
   <worldbody>
-    <geom name="floor" size="5 5 0.1" type="plane" condim="3"/>
+    <geom name="floor" size="5 5 0.1" conaffinity="1" type="plane" condim="3"/>
 
     <body name="robot" pos="0 0 0.03">
       <site name="robot"/>
       <site name="point1" pos="0.3 0 0"/>
       <site name="point2" pos="0.15 0 0"/>
       <camera name="vision" pos=".125 0 .2" xyaxes="0 -1 0 .4 0 1" fovy="100"/>
-      <geom name="link_1" density="1000" fromto="0.3 0 0 0.15 0 0" size="0.02" type="capsule"/>
+      <geom name="link_1" density="1000" fromto="0.3 0 0 0.15 0 0" size="0.02" type="capsule" contype="1"/>
       <joint axis="1 0 0" name="robot_x" pos="0 0 0" type="slide"/>
       <joint axis="0 1 0" name="robot_y" pos="0 0 0" type="slide"/>
       <joint axis="0 0 1" name="robot_z" pos="0 0 0" type="hinge"/>
       <body name="mid" pos="0.15 0 0">
         <site name="point3" pos="-0.15 0 0"/>
-        <geom name="link_2" density="1000" fromto="0 0 0 -0.15 0 0" size="0.02" type="capsule"/>
-        <joint axis="0 0 1" limited="true" name="motor1_rot" pos="0 0 0" range="-100 100" type="hinge"/>
+        <geom name="link_2" density="1000" fromto="0 0 0 -0.15 0 0" size="0.02" type="capsule" contype="1"/>
+        <joint axis="0 0 1" limited="true" name="motor1_rot" pos="0 0 0" range="-100 100" type="hinge" />
         <body name="back" pos="-0.15 0 0">
           <site name="point4" pos="-0.15 0 0"/>
-          <geom name="link_3" density="1000" fromto="0 0 0 -0.15 0 0" size="0.02" type="capsule"/>
+          <geom name="link_3" density="1000" fromto="0 0 0 -0.15 0 0" size="0.02" type="capsule" contype="1"/>
           <joint axis="0 0 1" limited="true" name="motor2_rot" pos="0 0 0" range="-100 100" type="hinge"/>
         </body>
       </body>
