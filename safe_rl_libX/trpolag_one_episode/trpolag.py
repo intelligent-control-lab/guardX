@@ -105,7 +105,7 @@ class TRPOLAGBufferX:
             
             # the next line computes rewards-to-go, to be targets for the value function
             self.ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(rews, self.gamma)[:-1].astype(np.float32)).to(device)
-            self.cost_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(costs, self.gamma)[:-1].astype(np.float32)).to(device)
+            self.cost_ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(costs, self.gamma)[:-1].astype(np.float32)).to(device)
   
     def get(self):
         """
@@ -359,7 +359,7 @@ def trpolag(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # get the Episode cost
         # Surrogate cost function 
         surr_cost = (ratio * adc).mean()        
-        lag_term = 10*surr_cost#ac.lmd * surr_cost
+        lag_term = ac.lmd * surr_cost
         
         # total policy loss
         loss_pi = loss_pi_reward + lag_term

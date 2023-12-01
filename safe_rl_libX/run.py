@@ -75,16 +75,10 @@ if __name__ == "__main__":
     # 'cpo', 'pcpo', 'pdo', 'scpo', 'trpofac', 'trpoipo', 'trpolag',    'usl', 'lpg', 'safelayer'
     # 有target_kl的: 'cpo', 'pcpo', 'pdo', 'scpo', 'trpofac', 'trpoipo', 'trpolag'
     
-    # for algo in ['a2c', 'apo', 'ppo', 'trpo']:
-    #     for seed in [0,1,2]:
-    #         python_files_and_args.append((f"{algo}/{algo}.py", f"--task Goal_Point_8Hazards_noconti -s {seed}"))
-            
-    for algo in ['trpolag']:
-        for seed in [2]:
-            python_files_and_args.append((f"{algo}/{algo}.py", f"--task Goal_Ant_8Hazards_noconti -s {seed}"))
-            
-    for algo in ['usl', 'lpg', 'safelayer']:
-        for seed in [0,1,2]:
-            python_files_and_args.append((f"{algo}/{algo}.py", f"--task Goal_Ant_8Hazards_noconti -s {seed}"))
+    # 'pdo', 'scpo', 'trpoipo', 'usl', 'lpg', 'safelayer'
+    # 结果合理的：cpo, pcpo, trpofac, trpolag
+    # 结果不合理的：pdo(实现问题)，
+    for algo in ['safelayer']:
+        python_files_and_args.append((f"{algo}_one_episode/{algo}.py", f"--task Goal_Point_8Hazards --exp_name {algo}_oe --epochs 150 --env_num 4000"))
     
-    run(python_files_and_args, [0,1,2,3,4,5,6,7])
+    run(python_files_and_args, [0,1])

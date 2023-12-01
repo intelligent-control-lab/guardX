@@ -103,7 +103,7 @@ class TRPOFACBufferX:
             
             # the next line computes rewards-to-go, to be targets for the value function
             self.ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(rews, self.gamma)[:-1].astype(np.float32)).to(device)
-            self.cost_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(costs, self.gamma)[:-1].astype(np.float32)).to(device)
+            self.cost_ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(costs, self.gamma)[:-1].astype(np.float32)).to(device)
   
 
     def get(self):

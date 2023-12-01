@@ -110,7 +110,7 @@ class CPOBufferX:
             
             # the next line computes rewards-to-go, to be targets for the value function
             self.ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(rews, self.gamma)[:-1].astype(np.float32)).to(device)
-            self.cost_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(costs, self.gamma)[:-1].astype(np.float32)).to(device)
+            self.cost_ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(costs, self.gamma)[:-1].astype(np.float32)).to(device)
   
     def get(self):
         """
@@ -128,9 +128,9 @@ class CPOBufferX:
             adv_buf_instance = (adv_buf_instance - adv_mean) / adv_std
             return adv_buf_instance
         def normalized_cost_advantage(adc_buf_instance):
-            adv_mean, _ = mpi_statistics_scalar(adc_buf_instance)
+            adc_mean, _ = mpi_statistics_scalar(adc_buf_instance)
             # center cost advantage, but don't scale
-            adc_buf_instance = (adc_buf_instance - adv_mean)
+            adc_buf_instance = (adc_buf_instance - adc_mean)
             return adc_buf_instance
         self.adv_buf = torch.from_numpy(np.asarray([normalized_advantage(adv_buf_instance) for adv_buf_instance in self.adv_buf.cpu().numpy()])).to(device)
         self.adc_buf = torch.from_numpy(np.asarray([normalized_cost_advantage(adc_buf_instance) for adc_buf_instance in self.adc_buf.cpu().numpy()])).to(device)

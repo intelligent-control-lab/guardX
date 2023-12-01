@@ -108,7 +108,7 @@ class PCPOBufferX:
             
             # the next line computes rewards-to-go, to be targets for the value function
             self.ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(rews, self.gamma)[:-1].astype(np.float32)).to(device)
-            self.cost_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(costs, self.gamma)[:-1].astype(np.float32)).to(device)
+            self.cost_ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(costs, self.gamma)[:-1].astype(np.float32)).to(device)
 
     def get(self):
         """
@@ -126,9 +126,9 @@ class PCPOBufferX:
             adv_buf_instance = (adv_buf_instance - adv_mean) / adv_std
             return adv_buf_instance
         def normalized_cost_advantage(adc_buf_instance):
-            adv_mean, _ = mpi_statistics_scalar(adc_buf_instance)
+            adc_mean, _ = mpi_statistics_scalar(adc_buf_instance)
             # center cost advantage, but don't scale
-            adc_buf_instance = (adc_buf_instance - adv_mean)
+            adc_buf_instance = (adc_buf_instance - adc_mean)
             return adc_buf_instance
         self.adv_buf = torch.from_numpy(np.asarray([normalized_advantage(adv_buf_instance) for adv_buf_instance in self.adv_buf.cpu().numpy()])).to(device)
         self.adc_buf = torch.from_numpy(np.asarray([normalized_cost_advantage(adc_buf_instance) for adc_buf_instance in self.adc_buf.cpu().numpy()])).to(device)
@@ -502,7 +502,7 @@ def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     start_time = time.time()
     
     o = env.reset()
-    ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
+    ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num)
     cum_cost = 0 
     # initialize the done maintainer 
     first_done_idx = torch.zeros(env_num, dtype=torch.int16)
