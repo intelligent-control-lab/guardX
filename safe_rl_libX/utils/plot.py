@@ -32,7 +32,7 @@ def plot_data(data, xaxis='Epoch', value="AverageEpRet", condition="Condition1",
     sns.set(style="darkgrid", font_scale=1.5, palette='colorblind')
     # import ipdb; ipdb.set_trace()
     # sns.tsplot(data=data, time=xaxis, value=value, unit="Unit", condition=condition, ci='sd', **kwargs)
-    sns.lineplot(data=data, x=xaxis, y=value, hue=condition, ci='sd', **kwargs)
+    sns.lineplot(data=data, x="Epoch", y=value, hue=condition, ci='sd', **kwargs)
     """
     If you upgrade to any version of Seaborn greater than 0.8.1, switch from 
     tsplot to lineplot replacing L29 with:
@@ -42,8 +42,12 @@ def plot_data(data, xaxis='Epoch', value="AverageEpRet", condition="Condition1",
     Changes the colorscheme and the default legend style, though.
     """
     # plt.legend(loc='best').set_draggable(True)
-    plt.legend(loc='upper center', ncol=1, handlelength=1,
-              borderaxespad=0., prop={'size': 13})
+    if 'Reward' in value:
+        plt.legend(loc='lower right', ncol=1, handlelength=1,
+              borderaxespad=0., prop={'size': 8})
+    else:
+        plt.legend(loc='upper right', ncol=1, handlelength=1,
+              borderaxespad=0., prop={'size': 8})
 
     """
     For the version of the legend used in the Spinning Up benchmarking page, 

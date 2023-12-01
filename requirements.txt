@@ -6,3 +6,4 @@ mediapy
 joblib
 mpi4py
 xmltodict
+seaborn

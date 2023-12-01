@@ -534,13 +534,12 @@ class Engine(gym.Env, gym.utils.EzPickle):
         # Dictionary is map from object name -> tuple of (placements list, keepout)
         placements = {}
 
-        placements.update(self.placements_dict_from_object('robot'))
-
         if self.task in ['goal']:
             placements.update(self.placements_dict_from_object('goal'))
         if self.hazards_num: #self.constrain_hazards:
             placements.update(self.placements_dict_from_object('hazard'))
-
+        placements.update(self.placements_dict_from_object('robot'))
+        
         self.placements = placements
 
     def sample_layout(self, rng):
@@ -567,6 +566,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
                 conflicted = jp.where(flag > 0., x=0., y=conflicted)
             layout[name] = xy
             success = jp.where(conflicted > 0., x=0., y=success) 
+        dist_robot_goal = jp.sqrt(jp.sum(jp.square(layout['robot'][:2] - layout['goal'][:2]))) 
+        success = jp.where(dist_robot_goal < 3.0, x=0., y=success) 
         return layout, success
 
     def constrain_placement(self, placement, keepout):

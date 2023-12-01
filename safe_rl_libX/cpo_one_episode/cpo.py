@@ -772,3 +772,5 @@ if __name__ == '__main__':
         seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
         logger_kwargs=logger_kwargs, target_cost=args.target_cost, 
         model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction)
+    
+    # CUDA_VISIBLE_DEVICES=2 python cpo.py --model_save --task Goal_Ant_8Hazards --env_num 4000 --max_ep_len 200 --epochs 200 --target_cost -0.05
