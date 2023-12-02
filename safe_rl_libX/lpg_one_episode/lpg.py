@@ -46,6 +46,7 @@ class LpgBufferX:
         self.path_start_idx = np.zeros(env_num, dtype=np.int16)
         self.max_ep_len = max_ep_len
         self.env_num = env_num
+        self.valid_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
     
     def store(self, obs, act, act_safe, rew, val, logp, mu, logstd, cost, qc):
         """
@@ -103,6 +104,8 @@ class LpgBufferX:
             costs = np.append(self.cost_buf[done_env_idx, path_slice].cpu().numpy(), 0)
             self.targetc_buf[done_env_idx, path_slice] = torch.from_numpy((costs[:-1] + self.gamma * qcs[1:]).astype(np.float32)).to(device)
                 
+            self.valid_buf[done_env_idx, path_slice] = 1
+            
     def get(self):
         """
         Call this at the end of an epoch to get all of the data from
@@ -120,17 +123,22 @@ class LpgBufferX:
             return adv_buf_instance
         self.adv_buf = torch.from_numpy(np.asarray([normalized_advantage(adv_buf_instance) for adv_buf_instance in self.adv_buf.cpu().numpy()])).to(device)
         
-        data = dict(obs=self.obs_buf.view(self.env_num * self.max_ep_len, self.obs_buf.shape[-1]), 
-                    act=self.act_buf.view(self.env_num * self.max_ep_len, self.act_buf.shape[-1]),
-                    act_safe=self.act_safe_buf.view(self.env_num * self.max_ep_len, self.act_safe_buf.shape[-1]),
-                    ret=self.ret_buf.view(self.env_num * self.max_ep_len),
-                    adv=self.adv_buf.view(self.env_num * self.max_ep_len),
-                    logp=self.logp_buf.view(self.env_num * self.max_ep_len),
-                    mu=self.mu_buf.view(self.env_num * self.max_ep_len, self.mu_buf.shape[-1]),
-                    logstd=self.logstd_buf.view(self.env_num * self.max_ep_len, self.logstd_buf.shape[-1]),
-                    cost=self.cost_buf.view(self.env_num * self.max_ep_len),
-                    targetc=self.targetc_buf.view(self.env_num * self.max_ep_len)
+        valid = torch.where(self.valid_buf.view(self.env_num * self.max_ep_len)==1)
+
+        data = dict(obs=self.obs_buf.view(self.env_num * self.max_ep_len, self.obs_buf.shape[-1])[valid], 
+                    act=self.act_buf.view(self.env_num * self.max_ep_len, self.act_buf.shape[-1])[valid],
+                    act_safe=self.act_safe_buf.view(self.env_num * self.max_ep_len, self.act_safe_buf.shape[-1])[valid],
+                    ret=self.ret_buf.view(self.env_num * self.max_ep_len)[valid],
+                    adv=self.adv_buf.view(self.env_num * self.max_ep_len)[valid],
+                    logp=self.logp_buf.view(self.env_num * self.max_ep_len)[valid],
+                    mu=self.mu_buf.view(self.env_num * self.max_ep_len, self.mu_buf.shape[-1])[valid],
+                    logstd=self.logstd_buf.view(self.env_num * self.max_ep_len, self.logstd_buf.shape[-1])[valid],
+                    cost=self.cost_buf.view(self.env_num * self.max_ep_len)[valid],
+                    targetc=self.targetc_buf.view(self.env_num * self.max_ep_len)[valid]
         )
+
+        self.valid_buf = torch.zeros(self.env_num, self.max_ep_len, dtype=torch.float32).to(device)
+
         return {k: v for k,v in data.items()}
 
 def get_net_param_np_vec(net):

@@ -75,10 +75,10 @@ if __name__ == "__main__":
     # 'cpo', 'pcpo', 'pdo', 'scpo', 'trpofac', 'trpoipo', 'trpolag',    'usl', 'lpg', 'safelayer'
     # 有target_kl的: 'cpo', 'pcpo', 'pdo', 'scpo', 'trpofac', 'trpoipo', 'trpolag'
     
-    # 'pdo', 'scpo', 'trpoipo', 'usl', 'lpg', 'safelayer'
-    # 结果合理的：cpo, pcpo, trpofac, trpolag
+    # 'scpo', 'trpoipo', 'usl', 'lpg'
+    # 结果合理的：cpo, pcpo, trpofac, trpolag, safelayer, 
     # 结果不合理的：pdo(实现问题)，
-    for algo in ['safelayer']:
+    for algo in ['cpo', 'pcpo', 'trpofac', 'trpolag', 'safelayer', 'trpo']:
         python_files_and_args.append((f"{algo}_one_episode/{algo}.py", f"--task Goal_Point_8Hazards --exp_name {algo}_oe --epochs 150 --env_num 4000"))
     
-    run(python_files_and_args, [0,1])
+    run(python_files_and_args, [0,1,3])
