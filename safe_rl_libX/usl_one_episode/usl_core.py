@@ -192,26 +192,7 @@ class C_Critic(nn.Module):
             update_index = full_index[~torch.isin(full_index, index)]
             act.requires_grad_(False)
             act[update_index] = act[update_index] - eta * act.grad[update_index] / (Z[update_index].unsqueeze(-1) + 1e-8)
-            
         return act.detach()        
-        
-        # if pred <= delta:
-        #     return act.detach().cpu().numpy()
-        # else:
-        #     for i in range(Niter):
-        #         if max(np.abs(act.cpu().data.numpy().flatten())) > self.max_action:
-        #             break
-        #         act.retain_grad()
-        #         self.c_net.zero_grad()
-        #         pred = self.forward(torch.cat((obs,act), axis=1))
-        #         pred.backward(retain_graph=True)
-        #         if pred.item() <= delta:
-        #             break
-        #         Z = np.max(np.abs(act.grad.cpu().data.numpy().flatten()))
-        #         act = act - eta * act.grad / (Z + 1e-8)
-
-        #     return act.detach().cpu().numpy()
-
 
 class MLPActorCritic(nn.Module):
 

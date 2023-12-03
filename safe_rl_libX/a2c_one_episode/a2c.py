@@ -392,6 +392,9 @@ def a2c(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
                 # finish path 
                 buf.finish_path(v, first_done_idx)
+
+                reward_per_step = (ep_ret / ep_len).mean()
+                logger.store(MaxEpLenRet=reward_per_step*1000.0)
                 
                 # log information 
                 logger.store(EpRet=ep_ret, 
@@ -420,6 +423,7 @@ def a2c(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', average_only=True)
+        logger.log_tabular('MaxEpLenRet', average_only=True)
         logger.log_tabular('EpCost', average_only=True)
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)

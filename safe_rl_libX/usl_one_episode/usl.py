@@ -19,7 +19,7 @@ import os.path as osp
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 EPS = 1e-8
-class UslBufferX:
+class USLBufferX:
     """
     A buffer for storing trajectories experienced by a USL agent interacting
     with the environment, and using Generalized Advantage Estimation (GAE-Lambda)
@@ -317,7 +317,7 @@ def usl(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up experience buffer
     local_steps_per_epoch = int(max_ep_len * env_num / num_procs())
-    buf = UslBufferX(env_num, max_ep_len, obs_dim, act_dim, gamma, lam)
+    buf = USLBufferX(env_num, max_ep_len, obs_dim, act_dim, gamma, lam)
 
 
     def compute_kl_pi(data, cur_pi):
@@ -337,7 +337,7 @@ def usl(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     def compute_loss_pi(data, cur_pi):
         """
-        The reward objective for Usl (Usl policy loss)
+        The reward objective for USL (USL policy loss)
         """
         obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
         
@@ -539,6 +539,9 @@ def usl(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
                 # finish path 
                 buf.finish_path(v, first_done_idx)
+
+                reward_per_step = (ep_ret / ep_len).mean()
+                logger.store(MaxEpLenRet=reward_per_step*1000.0)
                 
                 # log information 
                 logger.store(EpRet=ep_ret, 
@@ -555,7 +558,7 @@ def usl(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if ((epoch % save_freq == 0) or (epoch == epochs-1)) and model_save:
             logger.save_state({'env': env}, None)
 
-        # Perform Usl update!
+        # Perform USL update!
         update()
         
         #=====================================================================#
@@ -567,8 +570,9 @@ def usl(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', average_only=True)
-        logger.log_tabular('EpLen', average_only=True)
+        logger.log_tabular('MaxEpLenRet', average_only=True)
         logger.log_tabular('EpCost', average_only=True)
+        logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
         logger.log_tabular('CostRate', cost_rate)
         logger.log_tabular('VVals', average_only=True)

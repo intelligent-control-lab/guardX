@@ -127,9 +127,9 @@ class SCPOBufferX:
             adv_buf_instance = (adv_buf_instance - adv_mean) / adv_std
             return adv_buf_instance
         def normalized_cost_advantage(adc_buf_instance):
-            adv_mean, _ = mpi_statistics_scalar(adc_buf_instance)
+            adc_mean, _ = mpi_statistics_scalar(adc_buf_instance)
             # center cost advantage, but don't scale
-            adc_buf_instance = (adc_buf_instance - adv_mean)
+            adc_buf_instance = (adc_buf_instance - adc_mean)
             return adc_buf_instance
         self.adv_buf = torch.from_numpy(np.asarray([normalized_advantage(adv_buf_instance) for adv_buf_instance in self.adv_buf.cpu().numpy()])).to(device)
         self.adc_buf = torch.from_numpy(np.asarray([normalized_cost_advantage(adc_buf_instance) for adc_buf_instance in self.adc_buf.cpu().numpy()])).to(device)
@@ -204,7 +204,7 @@ def auto_hession_x(objective, net, x):
 def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         env_num=100, max_ep_len=1000, epochs=50, gamma=0.99, 
         vf_lr=1e-3, vcf_lr=1e-3, train_v_iters=80, train_vc_iters=80, lam=0.97, 
-        target_kl=0.01, target_cost = 1.5, logger_kwargs=dict(), save_freq=10, backtrack_coeff=0.8, 
+        target_kl=0.01, target_cost = -0.1, logger_kwargs=dict(), save_freq=10, backtrack_coeff=0.8, 
         backtrack_iters=100, model_save=False, cost_reduction=0):
     """
     State-wise Constrained Policy Optimization, 
@@ -608,20 +608,20 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     start_time = time.time()
     
     o = env.reset()
-    ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
+    ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num)
     cum_cost = 0 
     # initialize the done maintainer 
     first_done_idx = torch.zeros(env_num, dtype=torch.int16)
     
     M = torch.zeros(env_num, 1, dtype=torch.float32).to(device) # initialize the current maximum cost
     o_aug = torch.cat((o, M), axis=1) # augmented observation = observation + M 
-    first_step = np.ones(env_num) # flag for the first step of each episode
+    first_step = True
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for t in range(max_ep_len):
-            o[o.isnan()] = 0
-            o[o.isinf()] = 0
+            o_aug[o_aug.isnan()] = 0
+            o_aug[o_aug.isinf()] = 0
             a, v, vc, logp, mu, logstd = ac.step(torch.as_tensor(o_aug, dtype=torch.float32))
             
             next_o, r, d, info = env.step(a)
@@ -637,15 +637,14 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # only cost and reward are valid only where episode is not done
             cost_valid = torch.where(first_done_idx > 0, 0, info['cost'].cpu())
             r_valid = torch.where(first_done_idx > 0, 0, r.cpu())
-            
-            cost_increase = info['cost']
-            M_next = info['cost']
-            for i in range(env_num):
-                if first_step[i]:
-                    first_step[i] = False
-                else:
-                    cost_increase[i] = max(info['cost'][i] - M[i], 0)
-                    M_next[i] = M[i] + cost_increase[i]
+
+            if first_step:
+                cost_increase = info['cost']
+                M_next = info['cost']
+                first_step = False
+            else:
+                cost_increase = torch.max(info['cost'] - M, torch.zeros_like(M).to(device))
+                M_next = M + cost_increase
              
             # Track cumulative cost over training
             # update return, length, cost of env_num batch episodes
@@ -702,6 +701,9 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
                 # finish path 
                 buf.finish_path(v, vc, first_done_idx)
+
+                reward_per_step = (ep_ret / ep_len).mean()
+                logger.store(MaxEpLenRet=reward_per_step*1000.0)
                 
                 # log information 
                 logger.store(EpRet=ep_ret, 
@@ -715,7 +717,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 first_done_idx = torch.zeros(o.shape[0], dtype=torch.int16)
                 M = torch.zeros(env_num, 1, dtype=torch.float32).to(device) # initialize the current maximum cost
                 o_aug = torch.cat((o, M.view(-1,1)), axis=1) # augmented observation = observation + M 
-                first_step = np.ones(env_num)
+                first_step = True
 
         # Save model
         if ((epoch % save_freq == 0) or (epoch == epochs-1)) and model_save:
@@ -733,6 +735,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', average_only=True)
+        logger.log_tabular('MaxEpLenRet', average_only=True)
         logger.log_tabular('EpCost', average_only=True)
         logger.log_tabular('EpMaxCost', average_only=True)
         logger.log_tabular('EpLen', average_only=True)
@@ -755,7 +758,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
     parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
-    parser.add_argument('--target_cost', type=float, default=-0.1) # the cost limit for the environment
+    parser.add_argument('--target_cost', type=float, default=-0.03) # the cost limit for the environment
     parser.add_argument('--target_kl', type=float, default=0.02) # the kl divergence limit for SCPO
     parser.add_argument('--cost_reduction', type=float, default=0.) # the cost_reduction limit when current policy is infeasible
     parser.add_argument('--hid', type=int, default=64)

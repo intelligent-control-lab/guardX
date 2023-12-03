@@ -89,7 +89,6 @@ class TRPOIPOBufferX:
         # path slice are different for each environment, 
         # separate treatement is required for each environment
         assert first_done_idx.shape[0] == self.env_num, 'wrong initialization of first_done_idx, unmatch shape with env_num'
-        self.first_done_idx = first_done_idx.cpu().numpy()
         for done_env_idx in range(self.env_num):
             path_slice = slice(self.path_start_idx[done_env_idx], first_done_idx[done_env_idx].cpu().numpy())
             rews = np.append(self.rew_buf[done_env_idx, path_slice].cpu().numpy(), last_val[done_env_idx].cpu().numpy())
@@ -469,8 +468,7 @@ def trpoipo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # reset environment
     o = env.reset()
     # return, length, cost of env_num batch episodes
-    ep_ret, ep_len, ep_cost, ep_cost_ret = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num), np.zeros(env_num)
-    # cum_cost is the cumulative cost over the training
+    ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num)
     cum_cost = 0 
     # initialize the done maintainer 
     first_done_idx = torch.zeros(env_num, dtype=torch.int16)
@@ -486,7 +484,6 @@ def trpoipo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             next_o, r, d, info = env.step(a)
             assert 'cost' in info.keys()
 
-            
             #-------------------------------------------
             # Stop log if first done already exists 
             #-------------------------------------------
@@ -548,6 +545,9 @@ def trpoipo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
                 # finish path 
                 buf.finish_path(v, first_done_idx)
+
+                reward_per_step = (ep_ret / ep_len).mean()
+                logger.store(MaxEpLenRet=reward_per_step*1000.0)
                 
                 # log information 
                 logger.store(EpRet=ep_ret, 
@@ -575,6 +575,7 @@ def trpoipo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', average_only=True)
+        logger.log_tabular('MaxEpLenRet', average_only=True)
         logger.log_tabular('EpCost', average_only=True)
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('CumulativeCost', cumulative_cost)
@@ -608,7 +609,7 @@ if __name__ == '__main__':
     parser.add_argument('--target_kl', type=float, default=0.02)
     parser.add_argument('--target_cost', type=float, default=0.)
     parser.add_argument('--t_ipo', type=float, default=0.01)
-    parser.add_argument('--penalty', type=float, default=0.0005)
+    parser.add_argument('--penalty', type=float, default=0.05)
     args = parser.parse_args()
 
     mpi_fork(args.cpu)  # run parallel code with mpi

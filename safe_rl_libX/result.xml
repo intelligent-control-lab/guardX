@@ -1,25 +1,79 @@
 <?xml version="1.0" encoding="utf-8"?>
-<mujoco>
+<mujoco model="ant_tiny">
+	<option timestep="0.09"></option>
 	<size njmax="3000" nconmax="1000"></size>
-	<option timestep="0.02"></option>
 	<default>
-		<geom condim="3" density="1" rgba="1 0 0 1"></geom>
-		<joint damping=".001"></joint>
-		<motor ctrlrange="-1 1" ctrllimited="true" forcerange="-.05 .05" forcelimited="true"></motor>
-		<velocity ctrlrange="-1 1" ctrllimited="true" forcerange="-.05 .05" forcelimited="true"></velocity>
-		<site size="0.032" type="sphere"></site>
+		<joint armature="1" damping="1" limited="true"></joint>
+		<geom condim="3" density="5.0" friction="0.75 0.01 0.01" margin="0.01" rgba="1 0 0 1" contype="0" conaffinity="0"></geom>
+		<motor ctrllimited="true" ctrlrange="-1.0 1.0" gear="70"></motor>
+		<site size="0.2" type="sphere" rgba="0 0 1 0"></site>
 	</default>
 	<worldbody>
-		<geom name="floor" size="3.5 3.5 0.1" type="plane" condim="3" rgba="1 1 1 1" material="MatPlane"></geom>
-		<body name="robot" pos="0.0 0.0 0.1" quat="1.0 0.0 0.0 0.0">
-			<camera name="vision" pos="0 0 .15" xyaxes="0 -1 0 .4 0 1" fovy="90"></camera>
+		<geom name="floor" size="3.5 3.5 0.1" conaffinity="1" type="plane" condim="3" rgba="1 1 1 1" material="MatPlane"></geom>
+		<body name="robot" pos="0.0 0.0 0.15" quat="1.0 0.0 0.0 0.0">
+			<site name="robot" rgba="1 0 0 .01"></site>
+			<camera name="vision" pos=".125 0 .2" xyaxes="0 -1 0 .4 0 1" fovy="100"></camera>
 			<camera name="track" mode="track" pos="0.0 -2.0 2" xyaxes="1.0 -0.0 0 0.0 1.0 1"></camera>
-			<joint type="slide" axis="1 0 0" name="robot_x" damping="0.01"></joint>
-			<joint type="slide" axis="0 1 0" name="robot_y" damping="0.01"></joint>
-			<joint type="hinge" axis="0 0 1" name="robot_z" damping="0.005"></joint>
-			<geom name="robot" type="sphere" size=".1" friction="1 0.01 0.01"></geom>
-			<geom name="pointarrow" pos="0.1 0 0" size="0.05 0.05 0.05" type="box"></geom>
-			<site name="robot" rgba="1 0 0 .1"></site>
+			<geom name="robot" pos="0 0 0" size="0.06" type="sphere"></geom>
+			<joint armature="0" axis="1 0 0" damping="0.1" limited="false" name="robot_x" pos="0 0 0" stiffness="0" type="slide"></joint>
+			<joint armature="0" axis="0 0 1" damping="0.01" limited="false" name="robot_z" pos="0 0 0" stiffness="0.1" type="hinge"></joint>
+			<joint armature="0" axis="0 1 0" damping="0.1" limited="false" name="robot_y" pos="0 0 0" stiffness="0" type="slide"></joint>
+			<body name="front_left_leg" pos="0 0 0">
+				<geom fromto="0.0 0.0 0.0 0.05 0.05 0.0" name="aux_1_geom" size="0.02" type="capsule"></geom>
+				<body name="aux_1" pos="0.05 0.05 0">
+					<joint axis="0 0 1" name="hip_1" pos="0.0 0.0 0.0" range="-30 30" type="hinge"></joint>
+					<geom fromto="0.0 0.0 0.0 0.05 0.05 0.0" name="front_left_leg_geom" size="0.02" type="capsule"></geom>
+					<body pos="0.05 0.05 0">
+						<joint axis="-1 1 0" name="ankle_1" pos="0.0 0.0 0.0" range="30 70" type="hinge"></joint>
+						<geom fromto="0.0 0.0 0.0 0.1 0.1 0.0" name="front_left_ankle_geom" size="0.02" type="capsule"></geom>
+						<geom type="sphere" pos="0.1 0.1 0.0" size="0.02" contype="1" conaffinity="0"></geom>
+						<site name="ankle_1a" pos="0 0 0"></site>
+						<site name="ankle_1b" pos="0.1 0.1 0.0"></site>
+					</body>
+				</body>
+			</body>
+			<body name="front_right_leg" pos="0 0 0">
+				<geom fromto="0.0 0.0 0.0 -0.05 0.05 0.0" name="aux_2_geom" size="0.02" type="capsule"></geom>
+				<body name="aux_2" pos="-0.05 0.05 0">
+					<joint axis="0 0 1" name="hip_2" pos="0.0 0.0 0.0" range="-30 30" type="hinge"></joint>
+					<geom fromto="0.0 0.0 0.0 -0.05 0.05 0.0" name="front_right_leg_geom" size="0.02" type="capsule"></geom>
+					<body pos="-0.05 0.05 0">
+						<joint axis="1 1 0" name="ankle_2" pos="0.0 0.0 0.0" range="-70 -30" type="hinge"></joint>
+						<geom fromto="0.0 0.0 0.0 -0.1 0.1 0.0" name="front_right_ankle_geom" size="0.02" type="capsule"></geom>
+						<geom type="sphere" pos="-0.1 0.1 0.0" size="0.02" contype="1" conaffinity="0"></geom>
+						<site name="ankle_2a" pos="0 0 0"></site>
+						<site name="ankle_2b" pos="-0.1 0.1 0.0"></site>
+					</body>
+				</body>
+			</body>
+			<body name="back_left_leg" pos="0 0 0">
+				<geom fromto="0.0 0.0 0.0 -0.05 -0.05 0.0" name="aux_3_geom" size="0.02" type="capsule"></geom>
+				<body name="aux_3" pos="-0.05 -0.05 0">
+					<joint axis="0 0 1" name="hip_3" pos="0.0 0.0 0.0" range="-30 30" type="hinge"></joint>
+					<geom fromto="0.0 0.0 0.0 -0.05 -0.05 0.0" name="back_left_leg_geom" size="0.02" type="capsule"></geom>
+					<body pos="-0.05 -0.05 0">
+						<joint axis="-1 1 0" name="ankle_3" pos="0.0 0.0 0.0" range="-70 -30" type="hinge"></joint>
+						<geom fromto="0.0 0.0 0.0 -0.1 -0.1 0.0" name="back_left_ankle_geom" size="0.02" type="capsule"></geom>
+						<geom type="sphere" pos="-0.1 -0.1 0.0" size="0.02" contype="1" conaffinity="0"></geom>
+						<site name="ankle_3a" pos="0 0 0"></site>
+						<site name="ankle_3b" pos="-0.1 -0.1 0.0"></site>
+					</body>
+				</body>
+			</body>
+			<body name="back_right_leg" pos="0 0 0">
+				<geom fromto="0.0 0.0 0.0 0.05 -0.05 0.0" name="aux_4_geom" size="0.02" type="capsule"></geom>
+				<body name="aux_4" pos="0.05 -0.05 0">
+					<joint axis="0 0 1" name="hip_4" pos="0.0 0.0 0.0" range="-30 30" type="hinge"></joint>
+					<geom fromto="0.0 0.0 0.0 0.05 -0.05 0.0" name="back_right_leg_geom" size="0.02" type="capsule"></geom>
+					<body pos="0.05 -0.05 0">
+						<joint axis="1 1 0" name="ankle_4" pos="0.0 0.0 0.0" range="30 70" type="hinge"></joint>
+						<geom fromto="0.0 0.0 0.0 0.1 -0.1 0.0" name="back_right_ankle_geom" size="0.02" type="capsule"></geom>
+						<geom type="sphere" pos="0.1 -0.1 0.0" size="0.02" contype="1" conaffinity="0"></geom>
+						<site name="ankle_4a" pos="0 0 0"></site>
+						<site name="ankle_4b" pos="0.1 -0.1 0.0"></site>
+					</body>
+				</body>
+			</body>
 		</body>
 		<body name="goal" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
 			<joint type="slide" axis="1 0 0" name="goal_x" damping="1" limited="false"></joint>
@@ -71,6 +125,30 @@
 		<camera name="fixedfar" pos="0 -5 5" zaxis="0 -1 1"></camera>
 	</worldbody>
 	<sensor>
+		<touch site="ankle_1a" name="touch_ankle_1a"></touch>
+		<touch site="ankle_2a" name="touch_ankle_2a"></touch>
+		<touch site="ankle_3a" name="touch_ankle_3a"></touch>
+		<touch site="ankle_4a" name="touch_ankle_4a"></touch>
+		<touch site="ankle_1b" name="touch_ankle_1b"></touch>
+		<touch site="ankle_2b" name="touch_ankle_2b"></touch>
+		<touch site="ankle_3b" name="touch_ankle_3b"></touch>
+		<touch site="ankle_4b" name="touch_ankle_4b"></touch>
+		<jointpos joint="hip_1" name="jointpos_hip_1"></jointpos>
+		<jointpos joint="hip_2" name="jointpos_hip_2"></jointpos>
+		<jointpos joint="hip_3" name="jointpos_hip_3"></jointpos>
+		<jointpos joint="hip_4" name="jointpos_hip_4"></jointpos>
+		<jointpos joint="ankle_1" name="jointpos_ankle_1"></jointpos>
+		<jointpos joint="ankle_2" name="jointpos_ankle_2"></jointpos>
+		<jointpos joint="ankle_3" name="jointpos_ankle_3"></jointpos>
+		<jointpos joint="ankle_4" name="jointpos_ankle_4"></jointpos>
+		<jointvel joint="hip_1" name="jointvel_hip_1"></jointvel>
+		<jointvel joint="hip_2" name="jointvel_hip_2"></jointvel>
+		<jointvel joint="hip_3" name="jointvel_hip_3"></jointvel>
+		<jointvel joint="hip_4" name="jointvel_hip_4"></jointvel>
+		<jointvel joint="ankle_1" name="jointvel_ankle_1"></jointvel>
+		<jointvel joint="ankle_2" name="jointvel_ankle_2"></jointvel>
+		<jointvel joint="ankle_3" name="jointvel_ankle_3"></jointvel>
+		<jointvel joint="ankle_4" name="jointvel_ankle_4"></jointvel>
 		<accelerometer site="robot" name="accelerometer"></accelerometer>
 		<velocimeter site="robot" name="velocimeter"></velocimeter>
 		<gyro site="robot" name="gyro"></gyro>
@@ -80,9 +158,14 @@
 		<subtreeangmom body="robot" name="subtreeangmom"></subtreeangmom>
 	</sensor>
 	<actuator>
-		<general gear="0.3" joint="robot_x" name="x"></general>
-		<general gear="0.3" joint="robot_y" name="y"></general>
-		<general gear="0.3" joint="robot_z" name="z"></general>
+		<motor name="hip_1" joint="hip_1"></motor>
+		<motor name="ankle_1" joint="ankle_1"></motor>
+		<motor name="hip_2" joint="hip_2"></motor>
+		<motor name="ankle_2" joint="ankle_2"></motor>
+		<motor name="hip_3" joint="hip_3"></motor>
+		<motor name="ankle_3" joint="ankle_3"></motor>
+		<motor name="hip_4" joint="hip_4"></motor>
+		<motor name="ankle_4" joint="ankle_4"></motor>
 	</actuator>
 	<equality>
 	</equality>
