@@ -8,46 +8,42 @@ import torch
 from torch.optim import Adam
 import gym
 import time
-import copy
-import pcpo_core as core
-from utils.logx import EpochLogger, setup_logger_kwargs, colorize
+import papo_core as core
+from utils.logx import EpochLogger, setup_logger_kwargs
 from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
 from utils.safe_rl_env_config import create_env
 import os.path as osp
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-EPS = 1e-8
 
-class PCPOBufferX:
+
+class PPOBufferX:
     """
-    A buffer for storing trajectories experienced by a PCPO agent interacting
+    A buffer for storing trajectories experienced by a PPO agent interacting
     with the environment, and using Generalized Advantage Estimation (GAE-Lambda)
     for calculating the advantages of state-action pairs.
+    
+    Important notice! This bufferX assumes only one batch of episodes is collected per epoch.
     """
 
     def __init__(self, env_num, max_ep_len, obs_dim, act_dim, gamma=0.99, lam=0.95):
         self.obs_buf = torch.zeros(core.combined_shape(env_num, (max_ep_len, obs_dim[0])), dtype=torch.float32).to(device)
         self.act_buf = torch.zeros(core.combined_shape(env_num, (max_ep_len, act_dim[0])), dtype=torch.float32).to(device)
         self.adv_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
+        self.adv_pair_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
         self.rew_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
         self.ret_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
         self.val_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
-        self.cost_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
-        self.cost_ret_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
-        self.cost_val_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
-        self.adc_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
         self.logp_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
-        self.mu_buf = torch.zeros(core.combined_shape(env_num, (max_ep_len, act_dim[0])), dtype=torch.float32).to(device)
-        self.logstd_buf = torch.zeros(core.combined_shape(env_num, (max_ep_len, act_dim[0])), dtype=torch.float32).to(device)
         self.gamma, self.lam = gamma, lam
         self.ptr = np.zeros(env_num, dtype=np.int16)
         self.path_start_idx = np.zeros(env_num, dtype=np.int16)
         self.max_ep_len = max_ep_len
         self.env_num = env_num
         self.valid_buf = torch.zeros(env_num, max_ep_len, dtype=torch.float32).to(device)
-        
-    def store(self, obs, act, rew, val, logp, cost, cost_val, mu, logstd):
+
+    def store(self, obs, act, rew, val, logp):
         """
         Append one timestep of agent-environment interaction to the buffer.
         All input are env_num batch elements. E.g. shape(obs) = (env_num, obs_shape).
@@ -61,13 +57,10 @@ class PCPOBufferX:
         self.rew_buf[:,ptr] = rew
         self.val_buf[:,ptr] = val
         self.logp_buf[:,ptr] = logp
-        self.cost_buf[:,ptr] = cost
-        self.cost_val_buf[:,ptr] = cost_val
-        self.mu_buf[:,ptr,:] = mu
-        self.logstd_buf[:,ptr,:] = logstd
         self.ptr += 1
-    
-    def finish_path(self, last_val=None, last_cost_val=None, first_done_idx=None):
+
+
+    def finish_path(self, last_val=None, first_done_idx=None):
         """
         Call this at the end of a trajectory, or when one gets cut off
         by an epoch ending. This looks back in the buffer to where the
@@ -82,34 +75,25 @@ class PCPOBufferX:
         This allows us to bootstrap the reward-to-go calculation to account
         for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
         
-        The "last_cost_val" argument row entry should be 0 if the trajectory ended
-        because the agent reached a terminal state (died), and otherwise
-        should be VC(s_T), the cost value function estimated for the last state.
-        This allows us to bootstrap the cost-to-go calculation to account
-        for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
-        
-        The "first_done_idx" indicates the first index where episode is finished 
+        The "done" argument indicates which environment should be considered
+        for finish_path.
         """ 
-        # path slice are different for each environment, 
-        # separate treatement is required for each environment
         assert first_done_idx.shape[0] == self.env_num, 'wrong initialization of first_done_idx, unmatch shape with env_num'
         for done_env_idx in range(self.env_num):
             path_slice = slice(self.path_start_idx[done_env_idx], first_done_idx[done_env_idx].cpu().numpy())
             rews = np.append(self.rew_buf[done_env_idx, path_slice].cpu().numpy(), last_val[done_env_idx].cpu().numpy())
             vals = np.append(self.val_buf[done_env_idx, path_slice].cpu().numpy(), last_val[done_env_idx].cpu().numpy())
-            costs = np.append(self.cost_buf[done_env_idx, path_slice].cpu().numpy(), last_cost_val[done_env_idx].cpu().numpy())
-            cost_vals = np.append(self.cost_val_buf[done_env_idx, path_slice].cpu().numpy(), last_cost_val[done_env_idx].cpu().numpy())
             
             # the next two lines implement GAE-Lambda advantage calculation
             deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
-            cost_deltas = costs[:-1] + self.gamma * cost_vals[1:] - cost_vals[:-1]
+
+            # advantage of evert (s,a) pair
+            self.adv_pair_buf[done_env_idx, path_slice] = torch.from_numpy(deltas.astype(np.float32)).to(device)
             
             self.adv_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(deltas, self.gamma * self.lam).astype(np.float32)).to(device)
-            self.adc_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(cost_deltas, self.gamma * self.lam).astype(np.float32)).to(device)
-            
+
             # the next line computes rewards-to-go, to be targets for the value function
             self.ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(rews, self.gamma)[:-1].astype(np.float32)).to(device)
-            self.cost_ret_buf[done_env_idx, path_slice] = torch.from_numpy(core.discount_cumsum(costs, self.gamma)[:-1].astype(np.float32)).to(device)
 
             self.valid_buf[done_env_idx, path_slice] = 1
             
@@ -128,13 +112,7 @@ class PCPOBufferX:
             adv_mean, adv_std = mpi_statistics_scalar(adv_buf_instance)
             adv_buf_instance = (adv_buf_instance - adv_mean) / adv_std
             return adv_buf_instance
-        def normalized_cost_advantage(adc_buf_instance):
-            adc_mean, _ = mpi_statistics_scalar(adc_buf_instance)
-            # center cost advantage, but don't scale
-            adc_buf_instance = (adc_buf_instance - adc_mean)
-            return adc_buf_instance
         self.adv_buf = torch.from_numpy(np.asarray([normalized_advantage(adv_buf_instance) for adv_buf_instance in self.adv_buf.cpu().numpy()])).to(device)
-        self.adc_buf = torch.from_numpy(np.asarray([normalized_cost_advantage(adc_buf_instance) for adc_buf_instance in self.adc_buf.cpu().numpy()])).to(device)
         
         valid = torch.where(self.valid_buf.view(self.env_num * self.max_ep_len)==1)
 
@@ -142,74 +120,26 @@ class PCPOBufferX:
                     act=self.act_buf.view(self.env_num * self.max_ep_len, self.act_buf.shape[-1])[valid],
                     ret=self.ret_buf.view(self.env_num * self.max_ep_len)[valid],
                     adv=self.adv_buf.view(self.env_num * self.max_ep_len)[valid],
-                    cost_ret=self.cost_ret_buf.view(self.env_num * self.max_ep_len)[valid],
-                    adc=self.adc_buf.view(self.env_num * self.max_ep_len)[valid],
                     logp=self.logp_buf.view(self.env_num * self.max_ep_len)[valid],
-                    mu=self.mu_buf.view(self.env_num * self.max_ep_len, self.mu_buf.shape[-1])[valid],
-                    logstd=self.logstd_buf.view(self.env_num * self.max_ep_len, self.logstd_buf.shape[-1])[valid],
+                    adv_pair=self.adv_pair_buf.view(self.env_num * self.max_ep_len)[valid],
+                    val=self.val_buf.view(self.env_num * self.max_ep_len)[valid]
         )
 
         self.valid_buf = torch.zeros(self.env_num, self.max_ep_len, dtype=torch.float32).to(device)
 
         return {k: v for k,v in data.items()}
 
-def get_net_param_np_vec(net):
-    """
-        Get the parameters of the network as numpy vector
-    """
-    return torch.cat([val.flatten() for val in net.parameters()], axis=0).detach().cpu().numpy()
 
-def assign_net_param_from_flat(param_vec, net):
-    param_sizes = [np.prod(list(val.shape)) for val in net.parameters()]
-    ptr = 0
-    for s, param in zip(param_sizes, net.parameters()):
-        param.data.copy_(torch.from_numpy(param_vec[ptr:ptr+s]).reshape(param.shape))
-        ptr += s
+def papo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
+        env_num=100, max_ep_len=1000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
+        vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, 
+        target_kl=0.01, logger_kwargs=dict(), save_freq=10, model_save=False,
+        k=10., omega_1=0.01, omega_2=0.01, detailed=False):
+    """
+    Proximal Policy Optimization (by clipping), 
 
-def cg(Ax, b, cg_iters=100):
-    x = np.zeros_like(b)
-    r = b.copy() # Note: should be 'b - Ax', but for x=0, Ax=0. Change if doing warm start.
-    p = r.copy()
-    r_dot_old = np.dot(r,r)
-    for _ in range(cg_iters):
-        z = Ax(p)
-        alpha = r_dot_old / (np.dot(p, z) + EPS)
-        x += alpha * p
-        r -= alpha * z
-        r_dot_new = np.dot(r,r)
-        p = r + (r_dot_new / r_dot_old) * p
-        r_dot_old = r_dot_new
-        # early stopping 
-        if np.linalg.norm(p) < EPS:
-            break
-    return x
+    with early stopping based on approximate KL
 
-def auto_grad(objective, net, to_numpy=True):
-    """
-    Get the gradient of the objective with respect to the parameters of the network
-    """
-    grad = torch.autograd.grad(objective, net.parameters(), create_graph=True)
-    if to_numpy:
-        return torch.cat([val.flatten() for val in grad], axis=0).detach().cpu().numpy()
-    else:
-        return torch.cat([val.flatten() for val in grad], axis=0)
-
-def auto_hession_x(objective, net, x):
-    """
-    Returns 
-    """
-    jacob = auto_grad(objective, net, to_numpy=False)
-    
-    return auto_grad(torch.dot(jacob, x), net, to_numpy=True)
-
-def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
-        env_num=100, max_ep_len=1000, epochs=50, gamma=0.99, 
-        vf_lr=1e-3, vcf_lr=1e-3, train_v_iters=80, train_vc_iters=80, lam=0.97, 
-        target_kl=0.01, target_cost = 1.5, logger_kwargs=dict(), save_freq=10, kl_proj=True,
-        model_save=False, cost_reduction=0):
-    """
-    Projection-Based Constrained Policy Optimization, 
- 
     Args:
         env_fn : A function which creates a copy of the environment.
             The environment must satisfy the OpenAI Gym API.
@@ -262,26 +192,34 @@ def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
 
         ac_kwargs (dict): Any kwargs appropriate for the ActorCritic object 
-            you provided to PCPO.
+            you provided to PPO.
 
         seed (int): Seed for random number generators.
 
-        env_num (int): Number of environment copies running in parallel.
+        env_num (int): Number of environment copies being run in parallel.
 
         epochs (int): Number of epochs of interaction (equivalent to
             number of policy updates) to perform.
 
         gamma (float): Discount factor. (Always between 0 and 1.)
 
+        clip_ratio (float): Hyperparameter for clipping in the policy objective.
+            Roughly: how far can the new policy go from the old policy while 
+            still profiting (improving the objective function)? The new policy 
+            can still go farther than the clip_ratio says, but it doesn't help
+            on the objective anymore. (Usually small, 0.1 to 0.3.) Typically
+            denoted by :math:`\epsilon`. 
+
+        pi_lr (float): Learning rate for policy optimizer.
+
         vf_lr (float): Learning rate for value function optimizer.
-        
-        vcf_lr (float): Learning rate for cost value function optimizer.
+
+        train_pi_iters (int): Maximum number of gradient descent steps to take 
+            on policy loss per epoch. (Early stopping may cause optimizer
+            to take fewer than this.)
 
         train_v_iters (int): Number of gradient descent steps to take on 
             value function per epoch.
-            
-        train_vc_iters (int): Number of gradient descent steps to take on 
-            cost value function per epoch.
 
         lam (float): Lambda for GAE-Lambda. (Always between 0 and 1,
             close to 1.)
@@ -291,20 +229,23 @@ def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         target_kl (float): Roughly what KL divergence we think is appropriate
             between new and old policies after an update. This will get used 
             for early stopping. (Usually small, 0.01 or 0.05.)
-            
-        target_cost (float): Cost limit that the agent should satisfy
-        
-        kl_proj (bool): Whether to use the KL divergence projection 
 
         logger_kwargs (dict): Keyword args for EpochLogger.
 
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
         
-        model_save (bool): If saving model.
-
+        k (int): Probability Factor.
+        
+        omega_1 (float): hyperparameter for the infinite norm of mu.
+        
+        omega_2 (float): hyperparameter for H_max. 
+        
+        atari (str): name of atari game (None if running continuous game).
+        
+        detailed (bool): whether to display detailed computation of square item in variance mean
     """
-
+    
     # Special function to avoid certain slowdowns from PyTorch + MPI combo.
     setup_pytorch_for_mpi()
 
@@ -334,68 +275,63 @@ def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up experience buffer
     local_steps_per_epoch = int(max_ep_len * env_num / num_procs())
-    buf = PCPOBufferX(env_num, max_ep_len, obs_dim, act_dim, gamma, lam)
-
-    #! TODO: make sure max_ep_len of buffer is the same with the max_ep_len setting from environment, error if not
-   
-    def compute_kl_pi(data, cur_pi):
-        """
-        Return the sample average KL divergence between old and new policies
-        """
-        obs, mu_old, logstd_old = data['obs'], data['mu'], data['logstd']
-        
-        # Average KL Divergence  
-        average_kl = cur_pi._d_kl(
-            torch.as_tensor(obs, dtype=torch.float32),
-            torch.as_tensor(mu_old, dtype=torch.float32),
-            torch.as_tensor(logstd_old, dtype=torch.float32), device=device)
-        
-        return average_kl
+    buf = PPOBufferX(env_num, max_ep_len, obs_dim, act_dim, gamma, lam)
     
-    def compute_cost_pi(data, cur_pi):
-        """
-        Return the suggorate cost for current policy
-        """
-        obs, act, adc, logp_old = data['obs'], data['act'], data['adc'], data['logp']
+    #! TODO: make sure max_ep_len of buffer is the same with the max_ep_len setting from environment, error if not
+
+    # Set up function for computing PPO policy loss
+    def compute_loss_pi(data):
+        obs, act, adv, adv_pair, logp_old, val = data['obs'], data['act'], data['adv'], data['adv_pair'], data['logp'], data['val']
+
+        # Policy loss
+        pi, logp = ac.pi(obs, act)
+        ratio = torch.exp(logp - logp_old) # note that log a - log b = log (a/b), then exp(log(a/b)) = a / b
+        clipped_ratio = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio)
+
+        mean_surr = torch.min(ratio*adv, clipped_ratio*adv).mean()
+
+        tmp_1 = (ratio-1)*adv_pair**2
+        tmp_2 = 2*ratio*adv_pair
+        clip_tmp_1 = (clipped_ratio-1)*adv_pair**2
+        clip_tmp_2 = 2*clipped_ratio*adv_pair
+
+        mean_var_surr = omega_1 * torch.min(tmp_1+tmp_2*omega_2, clip_tmp_1+clip_tmp_2*omega_2).mean()
+
+        if detailed:
+            kl_div = abs((logp_old - logp).mean().item())
+            epsilon = torch.max(adv)
+            bias = 4*gamma*kl_div*epsilon/(1-gamma)**2
+            min_J_square = mean_surr**2 + 2*val.mean()*mean_surr
+            if mean_surr + val.mean() - bias < 0:
+                min_J_square = 0
+        else:
+            min_J_square = mean_surr**2 + 2*val.mean()*mean_surr
+
+        factor = omega_1 * (1 - gamma**2) / k
+        L_ = torch.abs(adv)
+        var_mean_surr = factor * (L_**2 + 2*L_*val).mean() - min_J_square
         
-        # Surrogate cost function 
-        pi, logp = cur_pi(obs, act)
-        ratio = torch.exp(logp - logp_old)
-        surr_cost = (ratio * adc).mean()
-        
-        return surr_cost
-        
-    def compute_loss_pi(data, cur_pi):
-        """
-        The reward objective for PCPO (PCPO policy loss)
-        """
-        obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
-        
-        # Policy loss 
-        pi, logp = cur_pi(obs, act)
-        ratio = torch.exp(logp - logp_old)
-        loss_pi = (ratio * adv).mean() # the gradient of PCPO requires is for (maximize J) instead of (minimize -J)
+        # loss 
+        loss_pi = -(mean_surr - k*(mean_var_surr + var_mean_surr))*2/3.0 - mean_surr/3.0
         
         # Useful extra info
         approx_kl = (logp_old - logp).mean().item()
         ent = pi.entropy().mean().item()
-        pi_info = dict(kl=approx_kl, ent=ent)
-        
+        clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
+        clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
+        pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
+
         return loss_pi, pi_info
-        
+
+
     # Set up function for computing value loss
     def compute_loss_v(data):
         obs, ret = data['obs'], data['ret']
         return ((ac.v(obs) - ret)**2).mean()
-    
-    # Set up function for computing cost loss 
-    def compute_loss_vc(data):
-        obs, cost_ret = data['obs'], data['cost_ret']
-        return ((ac.vc(obs) - cost_ret)**2).mean()
 
     # Set up optimizers for policy and value function
+    pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
     vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
-    vcf_optimizer = Adam(ac.vc.parameters(), lr=vcf_lr)
 
     # Set up model saving
     if model_save:
@@ -404,84 +340,24 @@ def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def update():
         data = buf.get()
 
-        # log the loss objective and cost function and value function for old policy
-        pi_l_old, pi_info_old = compute_loss_pi(data, ac.pi)
+        pi_l_old, pi_info_old = compute_loss_pi(data)
         pi_l_old = pi_l_old.item()
-        surr_cost_old = compute_cost_pi(data, ac.pi)
-        surr_cost_old = surr_cost_old.item()
         v_l_old = compute_loss_v(data).item()
 
+        # Train policy with multiple steps of gradient descent
+        for i in range(train_pi_iters):
+            pi_optimizer.zero_grad()
+            loss_pi, pi_info = compute_loss_pi(data)
+            kl = mpi_avg(pi_info['kl'])
+            if kl > target_kl:
+                logger.log('Early stopping at step %d due to reaching max kl.'%i)
+                break
+            loss_pi.backward()
+            mpi_avg_grads(ac.pi)    # average grads across MPI processes
+            pi_optimizer.step()
 
-        # PCPO policy update core impelmentation 
-        loss_pi, pi_info = compute_loss_pi(data, ac.pi)
-        surr_cost = compute_cost_pi(data, ac.pi)
-        
-        # get Hessian for KL divergence
-        kl_div = compute_kl_pi(data, ac.pi)
-        Hx = lambda x: auto_hession_x(kl_div, ac.pi, torch.FloatTensor(x).to(device))
-        
-        # linearize the loss objective and cost function
-        g = auto_grad(loss_pi, ac.pi) # get the loss flatten gradient evaluted at pi old 
-        b = auto_grad(surr_cost, ac.pi) # get the cost flatten gradient evaluted at pi old
-        
-        # get the Episoe cost
-        EpLen = logger.get_stats('EpLen')[0]
-        EpCost = logger.get_stats('EpCost')[0]
-        
-        # cost constraint linearization
-         
-        c = EpCost - target_cost 
-        rescale  = EpLen
-        c /= (rescale + EPS)
-        
-        # core calculation for PCPO
-        Hinv_g   = cg(Hx, g)             # Hinv_g = H \ g        
-        approx_g = Hx(Hinv_g)           # g
-        # q        = np.clip(Hinv_g.T @ approx_g, 0.0, None)  # g.T / H @ g
-        q        = Hinv_g.T @ approx_g
-        Linv_b = cg(Hx, b) if kl_proj else b
-        approx_b = Hx(Linv_b) if kl_proj else b # b
-        
-        # solve QP
-        # decide optimization cases (feas/infeas, recovery)
-        # Determine optim_case (switch condition for calculation,
-        # based on geometry of constrained optimization problem)
-        if b.T @ b <= 1e-8 and c < 0:
-            Hinv_b, r, s, A, B = 0, 0, 0, 0, 0
-            optim_case = 4
-        else:
-            # cost grad is nonzero: PCPO update!
-            Hinv_b = cg(Hx, b)                # H^{-1} b
-            r = Hinv_b.T @ approx_g          # b^T H^{-1} g
-            s = Hinv_b.T @ Hx(Hinv_b)        # b^T H^{-1} b
-            A = q - r**2 / s            # should be always positive (Cauchy-Shwarz)
-            B = 2*target_kl - c**2 / s  # does safety boundary intersect trust region? (positive = yes)
-    
-        # get optimal theta-theta_k direction
-        trpo_step = np.sqrt((2*target_kl)/q)
-        cpo_step = max(0, (trpo_step * b.T @ Hinv_g + c)/(Linv_b.T @ approx_b))
-        x_direction = trpo_step * (Hinv_g) - cpo_step * Linv_b
-        
-        # copy an actor to conduct line search 
-        actor_tmp = copy.deepcopy(ac.pi)
-        def set_and_eval(step):
-            new_param = get_net_param_np_vec(ac.pi) + step * x_direction
-            assign_net_param_from_flat(new_param, actor_tmp)
-            kl = compute_kl_pi(data, actor_tmp)
-            pi_l, _ = compute_loss_pi(data, actor_tmp)
-            surr_cost = compute_cost_pi(data, actor_tmp)
-            
-            return kl, pi_l, surr_cost
-        
-        kl, pi_l_new, surr_cost_new = set_and_eval(1)
-        # update the policy parameter 
-        new_param = get_net_param_np_vec(ac.pi) + 1 * x_direction
-        assign_net_param_from_flat(new_param, ac.pi)
-        
-        loss_pi, pi_info = compute_loss_pi(data, ac.pi) # re-evaluate the pi_info for the new policy
-        surr_cost = compute_cost_pi(data, ac.pi) # re-evaluate the surr_cost for the new policy
-        
-        
+        logger.store(StopIter=i)
+
         # Value function learning
         for i in range(train_v_iters):
             vf_optimizer.zero_grad()
@@ -489,28 +365,22 @@ def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             loss_v.backward()
             mpi_avg_grads(ac.v)    # average grads across MPI processes
             vf_optimizer.step()
-            
-        # Cost value function learning
-        for i in range(train_vc_iters):
-            vcf_optimizer.zero_grad()
-            loss_vc = compute_loss_vc(data)
-            loss_vc.backward()
-            mpi_avg_grads(ac.vc)    # average grads across MPI processes
-            vcf_optimizer.step()
 
-        # Log changes from update        
-        kl, ent = pi_info['kl'], pi_info_old['ent']
-        logger.store(LossPi=pi_l_old, LossV=v_l_old, LossCost=surr_cost_old,
-                     KL=kl, Entropy=ent,
+        # Log changes from update
+        kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
+        logger.store(LossPi=pi_l_old, LossV=v_l_old,
+                     KL=kl, Entropy=ent, ClipFrac=cf,
                      DeltaLossPi=(loss_pi.item() - pi_l_old),
-                     DeltaLossV=(loss_v.item() - v_l_old),
-                     DeltaLossCost=(surr_cost.item() - surr_cost_old))
+                     DeltaLossV=(loss_v.item() - v_l_old))
 
     # Prepare for interaction with environment
     start_time = time.time()
     
+    # reset environment
     o = env.reset()
-    ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num)
+    # return, length, cost of env_num batch episodes
+    ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num) 
+    # cum_cost is the cumulative cost over the training
     cum_cost = 0 
     # initialize the done maintainer 
     first_done_idx = torch.zeros(env_num, dtype=torch.int16)
@@ -518,14 +388,14 @@ def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for t in range(max_ep_len):
+            # ac takes observation 
             o[o.isnan()] = 0
             o[o.isinf()] = 0
-            a, v, vc, logp, mu, logstd = ac.step(torch.as_tensor(o, dtype=torch.float32))
+            a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
             next_o, r, d, info = env.step(a)
             assert 'cost' in info.keys()
 
-            
             #-------------------------------------------
             # Stop log if first done already exists 
             #-------------------------------------------
@@ -535,22 +405,19 @@ def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # only cost and reward are valid only where episode is not done
             cost_valid = torch.where(first_done_idx > 0, 0, info['cost'].cpu())
             r_valid = torch.where(first_done_idx > 0, 0, r.cpu())
-        
-              
-            # Track cumulative cost over training
+            
             cum_cost += cost_valid.cpu().numpy().squeeze().sum()
             ep_ret += r_valid.cpu().numpy().squeeze()
-
+            if np.mean(ep_ret) < -10.0:
+                import ipdb;ipdb.set_trace()
             ep_len += 1
-            
-            assert ep_cost.shape == info['cost'].cpu().numpy().squeeze().shape
+            assert ep_cost.shape == cost_valid.cpu().numpy().squeeze().shape
             ep_cost += cost_valid.cpu().numpy().squeeze()
 
             # save and log
-            buf.store(o, a, r, v, logp, info['cost'], vc, mu, logstd)
+            buf.store(o, a, r, v, logp)
             logger.store(VVals=v.cpu().numpy())
-            
-            
+
             #-------------------------------------------
             # Update the done log 
             #-------------------------------------------
@@ -561,10 +428,11 @@ def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 # there is some environment done 
                 first_done_idx[np.where(done == 1)] = torch.where(cur_done_idx > 0, cur_done_idx, t+1) # done after (t+1) step, starting from (t+1) = 1,2,3,...
             
+            
             # Update obs (critical!)
             o = next_o
-                     
-            # timeout when maximum episode length is reached    
+
+            # timeout when maximum episode length is reached  
             timeout = (t + 1) == max_ep_len
             if timeout:
                 # one episode implementation, environment will directly run until maximum episode length
@@ -575,22 +443,19 @@ def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 o_valid = o_valid[rows_without_nan]
                 rows_without_inf = ~torch.isinf(o_valid).any(dim=1)
                 o_valid = o_valid[rows_without_inf]
-                _, v_boostrap, vc_bootstrap, _, _, _ = ac.step(torch.as_tensor(o_valid, dtype=torch.float32))
+                _, v_boostrap, _ = ac.step(torch.as_tensor(o_valid, dtype=torch.float32))
                 # set 0 for bootstrap value for nan environment  
                 v = torch.zeros(o.shape[0])
-                vc = torch.zeros(o.shape[0])
                 v[rows_without_nan] = v_boostrap.cpu()
-                vc[rows_without_nan] = vc_bootstrap.cpu()
                 
                 # set only none-done environment needs boostrap, otherwise, v = 0 
                 v = torch.where(first_done_idx > 0, 0, v)
-                vc = torch.where(first_done_idx > 0, 0, vc)
                 
                 # directly set non-done environment index as the maximum episode length 
                 first_done_idx = torch.where(first_done_idx > 0, first_done_idx, t+1) # done after (t+1) step, starting from (t+1) = 1,2,3,...
 
                 # finish path 
-                buf.finish_path(v, vc, first_done_idx)
+                buf.finish_path(v, first_done_idx)
 
                 reward_per_step = (ep_ret / ep_len).mean()
                 logger.store(MaxEpLenRet=reward_per_step*1000.0)
@@ -605,11 +470,12 @@ def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 ep_ret, ep_len, ep_cost = np.zeros(env_num), np.zeros(env_num, dtype=np.int16), np.zeros(env_num)
                 first_done_idx = torch.zeros(o.shape[0], dtype=torch.int16)
 
+
         # Save model
         if ((epoch % save_freq == 0) or (epoch == epochs-1)) and model_save:
             logger.save_state({'env': env}, None)
 
-        # Perform PCPO update!
+        # Perform PPO update!
         update()
         
         #=====================================================================#
@@ -634,16 +500,15 @@ def pcpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('DeltaLossV', average_only=True)
         logger.log_tabular('Entropy', average_only=True)
         logger.log_tabular('KL', average_only=True)
+        logger.log_tabular('ClipFrac', average_only=True)
+        logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
-
+        
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
     parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
-    parser.add_argument('--target_cost', type=float, default=0.) # the cost limit for the environment
-    parser.add_argument('--target_kl', type=float, default=0.02) # the kl divergence limit for PCPO
-    parser.add_argument('--cost_reduction', type=float, default=0.) # the cost_reduction limit when current policy is infeasible
     parser.add_argument('--hid', type=int, default=64)
     parser.add_argument('--l', type=int, default=2)
     parser.add_argument('--gamma', type=float, default=0.99)
@@ -652,28 +517,27 @@ if __name__ == '__main__':
     parser.add_argument('--env_num', type=int, default=1200)
     parser.add_argument('--max_ep_len', type=int, default=200)
     parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--exp_name', type=str, default='pcpo')
+    parser.add_argument('--exp_name', type=str, default='papo')
     parser.add_argument('--model_save', action='store_true')
-    parser.add_argument('--l2_proj', action='store_true')
+    parser.add_argument('--target_kl', type=float, default=0.02)
+    parser.add_argument('--omega1', type=float, default=0.001)       
+    parser.add_argument('--omega2', type=float, default=0.005)       
+    parser.add_argument('--k', '-k', type=float, default=10.5)
+    parser.add_argument('--detailed', '-d', action='store_false', default=True) 
     args = parser.parse_args()
 
     mpi_fork(args.cpu)  # run parallel code with mpi
     
-    kl_proj = False if args.l2_proj else True
-    
-    exp_name = args.task + '_' + args.exp_name \
-                + '_' + 'kl' + str(args.target_kl) \
-                + '_' + 'target_cost' + str(args.target_cost) \
-                + '_' + 'kl_proj' + str(kl_proj) \
-                + '_' + 'epochs' + str(args.epochs) \
-                + '_' + 'step' + str(args.max_ep_len * args.env_num)
-                
+    detail = 'Detailed' if args.detailed else 'notDetailed'
+    exp_name = args.task + '_' + args.exp_name + '_' + 'kl' + str(args.target_kl) \
+                        + '_' + detail \
+                        + '_' + 'epochs' + str(args.epochs) \
+                        + '_'+ 'step' + str(args.max_ep_len * args.env_num)
     logger_kwargs = setup_logger_kwargs(exp_name, args.seed)
-
+    
     # whether to save model
     model_save = True if args.model_save else False
-    pcpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
+    papo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
         seed=args.seed, env_num=args.env_num, max_ep_len=args.max_ep_len, epochs=args.epochs,
-        logger_kwargs=logger_kwargs, target_cost=args.target_cost, 
-        model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction, kl_proj=kl_proj)
+        logger_kwargs=logger_kwargs, model_save=model_save, target_kl=args.target_kl)

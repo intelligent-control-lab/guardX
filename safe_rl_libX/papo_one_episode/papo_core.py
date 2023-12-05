@@ -6,21 +6,7 @@ import torch
 import torch.nn as nn
 from torch.distributions.normal import Normal
 from torch.distributions.categorical import Categorical
-import torch.nn.functional as F
 
-EPS = 1e-8
-
-def diagonal_gaussian_kl(mu0, log_std0, mu1, log_std1):
-    """
-    torch symbol for mean KL divergence between two batches of diagonal gaussian distributions,
-    where distributions are specified by means and log stds.
-    (https://en.wikipedia.org/wiki/Kullback-Leibler_divergence#Multivariate_normal_distributions)
-    """
-    
-    var0, var1 = torch.exp(2 * log_std0), torch.exp(2 * log_std1)
-    pre_sum = 0.5*(((mu1- mu0)**2 + var0)/(var1 + EPS) - 1) +  log_std1 - log_std0
-    all_kls = torch.sum(pre_sum, axis=1)
-    return torch.mean(all_kls)
 
 def combined_shape(length, shape=None):
     if shape is None:
@@ -87,9 +73,6 @@ class Actor(nn.Module):
             logp_a = self._log_prob_from_distribution(pi, act)
         return pi, logp_a
 
-    def _d_kl(self, obs, old_mu, old_log_std, device):
-        raise NotImplementedError
-
 
 class MLPCategoricalActor(Actor):
     
@@ -103,9 +86,7 @@ class MLPCategoricalActor(Actor):
 
     def _log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act)
-    
-    def _d_kl(self, obs, old_mu, old_log_std, device):
-        raise NotImplementedError
+
 
 class MLPGaussianActor(Actor):
 
@@ -117,20 +98,11 @@ class MLPGaussianActor(Actor):
 
     def _distribution(self, obs):
         mu = self.mu_net(obs)
-        # std = 0.01 + 0.99 * torch.exp(self.log_std)
         std = torch.exp(self.log_std)
         return Normal(mu, std)
 
     def _log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act).sum(axis=-1)    # Last axis sum needed for Torch Normal distribution
-    
-    def _d_kl(self, obs, old_mu, old_log_std, device):
-        # kl divergence computation 
-        mu = self.mu_net(obs.to(device))
-        log_std = self.log_std 
-        
-        d_kl = diagonal_gaussian_kl(old_mu.to(device), old_log_std.to(device), mu, log_std) # debug test to see if P old in the front helps
-        return d_kl
 
 
 class MLPCritic(nn.Module):
@@ -141,53 +113,8 @@ class MLPCritic(nn.Module):
 
     def forward(self, obs):
         return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
-    
 
-# Dalal 2018 : c_{t} = c_{t-1} + g^T*a_{t}
-class C_Critic(nn.Module):
-    
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation, device):
-        super().__init__()
-        self.g_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
-        self.device = device
-        self.max_action = 1 # the default maximum action for safety gym 
 
-    def pred_g(self,obs):
-        return self.g_net(obs)
-    
-    def forward(self, obs, act):
-        g = self.pred_g(obs)
-        if len(obs.shape) == 1:
-            # special handle for none batch input case
-            assert len(obs.shape) == len(act.shape)
-            return torch.dot(g, act)
-        # (B,1,A)x(B,A,1) -> (B,1,1) -> (B,1)
-        # return torch.bmm(g.unsqueeze(1),act.unsqueeze(2)).view(1,-1)
-        return torch.flatten(torch.bmm(g.unsqueeze(1),act.unsqueeze(2)))
-    
-    # Get the corrected action 
-    def safety_correction(self, obs, act, prev_cost, delta=0.):
-        pred = self.forward(obs, act) + prev_cost
-        a_result = torch.zeros(act.shape).to(device=self.device)
-        
-        a_result[torch.where(pred<=delta)] = act[torch.where(pred<=delta)]
-        if len(torch.where(pred>delta)) != 0:
-            index = torch.where(pred>delta)
-            g = self.pred_g(obs[index])
-            # Equation (5) from Dalal 2018.
-            numer = self.forward(obs[index], act[index]) + prev_cost[index] - delta
-            if obs[index].shape[0] == 1:
-                assert obs.shape[0] == act.shape[0]
-                denomin = torch.dot(g.squeeze(),g.squeeze()) + 1e-8
-            else:
-                denomin = torch.bmm(g.unsqueeze(1),g.unsqueeze(2)).view(-1) + 1e-8
-            mult = F.relu(numer / denomin)
-            a_old = act[index]
-            a_new = a_old - mult.view(-1,1) * g
-            a_new = torch.clamp(a_new, -self.max_action, self.max_action)
-            a_result[index] = a_new
-        
-        return a_result.detach()
 
 class MLPActorCritic(nn.Module):
 
@@ -198,7 +125,6 @@ class MLPActorCritic(nn.Module):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
         obs_dim = observation_space.shape[0]
-        act_dim = action_space.shape[0]
 
         # policy builder depends on action space
         if isinstance(action_space, Box):
@@ -208,9 +134,6 @@ class MLPActorCritic(nn.Module):
 
         # build value function
         self.v  = MLPCritic(obs_dim, hidden_sizes, activation).to(self.device)
-        
-        # build cost critic function 
-        self.ccritic = C_Critic(obs_dim, act_dim, hidden_sizes, activation, self.device).to(self.device)
 
     def step(self, obs):
         with torch.no_grad():
@@ -219,8 +142,7 @@ class MLPActorCritic(nn.Module):
             a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
-        return a, v, logp_a, pi.mean, torch.log(pi.stddev)
+        return a, v, logp_a
 
     def act(self, obs):
         return self.step(obs)[0]
-

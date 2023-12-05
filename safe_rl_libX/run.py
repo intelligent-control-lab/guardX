@@ -48,7 +48,8 @@ def run(python_files_and_args, available_devices):
             print(f"Task {index} successfully executed on cuda:{best_gpu} with params [{file_path} {arguments}]")
         except Exception as e:
             print(f"Error when starting process {index}: {str(e)}")
-        time.sleep(10)
+        if "plot" not in file_path:
+            time.sleep(10)
     
     print("----------------------------")
 
@@ -77,12 +78,29 @@ if __name__ == "__main__":
      
     # 结果合理的：cpo, pcpo, trpofac, trpolag, safelayer, trpoipo, usl
     # 结果不合理的：pdo(实现问题)，lpg(实现问题)，'scpo'
-    # for algo in ['cpo', 'pcpo', 'trpofac', 'trpolag']:# 'safelayer', 'trpoipo', 'usl', 'trpo']: 
+    # for algo in ['cpo', 'pcpo', 'trpofac', 'trpolag', 'safelayer', 'trpoipo', 'usl', 'trpo']: 
     #     for seed in [0,1]:
-    #         python_files_and_args.append((f"{algo}_one_episode/{algo}.py", f"--task Goal_Ant_8Hazards --seed {seed} --exp_name {algo}_oe --epochs 150 --env_num 4000"))
+    #         python_files_and_args.append((f"{algo}_one_episode/{algo}.py", f"--task Goal_Walker_8Hazards --seed {seed} --exp_name {algo}_oe --epochs 150 --env_num 4000"))
     
-    for algo in ['a2c', 'ppo', 'trpo', 'apo', 'alphappo', 'vmpo', 'espo']: 
-        for seed in [0,1]:
-            python_files_and_args.append((f"{algo}_one_episode/{algo}.py", f"--task Goal_Ant_8Hazards --seed {seed} --epochs 100 --env_num 600"))
+    # for algo in ['a2c', 'ppo', 'trpo', 'apo', 'alphappo', 'vmpo', 'espo']: 
+    #     for seed in [0,1]:
+    #         python_files_and_args.append((f"{algo}_one_episode/{algo}.py", f"--task Goal_Walker_8Hazards --seed {seed} --epochs 100 --env_num 600"))
+    
+    # for robo in ['Point', 'Ant', 'Swimmer', 'Walker']: 
+    #     for seed in [0,1]:
+    #         python_files_and_args.append((f"papo_one_episode/papo.py", f"--task Goal_{robo}_8Hazards --seed {seed} --exp_name papo1_oe --epochs 100 --env_num 600 --omega1 0.001 --omega2 0.005"))
+    #         python_files_and_args.append((f"papo_one_episode/papo.py", f"--task Goal_{robo}_8Hazards --seed {seed} --exp_name papo2_oe --epochs 100 --env_num 600 --omega1 0.005 --omega2 0.01"))
+    #         python_files_and_args.append((f"papo_one_episode/papo.py", f"--task Goal_{robo}_8Hazards --seed {seed} --exp_name papo3_oe --epochs 100 --env_num 600 --omega1 0.01 --omega2 0.01"))
+            
+    log_dict = {}
+    base_dir = "../Final_Results"
+    origin_dirs = os.listdir(base_dir)
+    for origin_dir in origin_dirs:
+        log_dict[origin_dir] = [osp.join(base_dir, origin_dir, single_dir) for single_dir in os.listdir(osp.join(base_dir, origin_dir))]
+    
+    for key in log_dict.keys():
+        for dire in log_dict[key]:
+            python_files_and_args.append(("utils/plot_all.py", f"{dire}/ -s 28 --title {key}/{dire.split('/')[-1]} --value MaxEpLenRet --cost --reward"))
+    
     
     run(python_files_and_args, [0,1,2,3])

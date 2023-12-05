@@ -12,7 +12,7 @@ DIV_LINE_WIDTH = 50
 exp_idx = 0
 units = dict()
 
-def plot_data(data, xaxis='Epoch', value="AverageEpRet", condition="Condition1", smooth=1, **kwargs):
+def plot_data(data, title="", xaxis='Epoch', value="AverageEpRet", condition="Condition1", smooth=1, **kwargs):
     if smooth > 1:
         """
         smooth data with moving window average.
@@ -31,8 +31,9 @@ def plot_data(data, xaxis='Epoch', value="AverageEpRet", condition="Condition1",
         data = pd.concat(data, ignore_index=True)
     sns.set(style="darkgrid", font_scale=1.5, palette='colorblind')
     # import ipdb; ipdb.set_trace()
-    # sns.tsplot(data=data, time=xaxis, value=value, unit="Unit", condition=condition, ci='sd', **kwargs)
-    sns.lineplot(data=data, x="TotalEnvInteracts", y=value, hue=condition, errorbar='sd', **kwargs)
+    plt.figure(figsize=(8,6))
+    #sns.tsplot(data=data, time=xaxis, value=value, unit="Unit", condition=condition, ci='sd', **kwargs)
+    ax = sns.lineplot(data=data, x=xaxis, y=value, hue=condition, errorbar='sd', lw=2, **kwargs)
     """
     If you upgrade to any version of Seaborn greater than 0.8.1, switch from 
     tsplot to lineplot replacing L29 with:
@@ -41,13 +42,11 @@ def plot_data(data, xaxis='Epoch', value="AverageEpRet", condition="Condition1",
 
     Changes the colorscheme and the default legend style, though.
     """
-    # plt.legend(loc='best').set_draggable(True)
-    if 'Reward' in value:
-        plt.legend(loc='lower right', ncol=1, handlelength=1,
-              borderaxespad=0., prop={'size': 8})
-    else:
-        plt.legend(loc='upper right', ncol=1, handlelength=1,
-              borderaxespad=0., prop={'size': 8})
+    #plt.legend(loc='best').set_draggable(True)
+    plt.subplots_adjust(left=0.1, right=0.9, bottom=0.1, top=0.9)
+    plt.title(title[:-1].split('/')[-1], fontsize=34)
+    plt.legend(loc='upper center', ncol=4, handlelength=1,
+              borderaxespad=0., prop={'size': 13}, frameon=False)
 
     """
     For the version of the legend used in the Spinning Up benchmarking page, 
@@ -73,48 +72,94 @@ def get_datasets(logdir, condition=None):
     """
     global exp_idx
     global units
+    
+    def sort_key(element):
+        if "_trpo_" in element[0]:
+            return int(0)
+        elif "_ppo_" in element[0]:
+            return int(1)
+        elif "_a2c_" in element[0]:
+            return int(2)
+        elif "_apo_" in element[0]:
+            return int(3)
+        elif "_alphappo_" in element[0]:
+            return int(4)
+        elif "_espo_" in element[0]:
+            return int(5)
+        elif "_vmpo_" in element[0]:
+            return int(6)
+        elif "_cpo_" in element[0]:
+            return int(7)
+        elif "_pcpo_" in element[0]:
+            return int(8)
+        elif "_scpo_" in element[0]:
+            return int(9)
+        elif "_lpg_" in element[0]:
+            return int(10)
+        elif "_pdo_" in element[0]:
+            return int(11)
+        elif "_safelayer_" in element[0]:
+            return int(12)
+        elif "_trpofac_" in element[0]:
+            return int(13)
+        elif "_trpoipo_" in element[0]:
+            return int(14)
+        elif "_trpolag_" in element[0]:
+            return int(15)
+        elif "_usl_" in element[0]:
+            return int(16)
+        else: 
+            return int(17)        
+    
     datasets = []
-    for root, _, files in os.walk(logdir):
+    dirs = [(root, files) for root, _, files in os.walk(logdir)][1:]
+    dirs = sorted(dirs, key=sort_key)
+    for root, files in dirs:
         if 'progress.txt' in files:
-            config_path = open(os.path.join(root,'config.json'))
-            config = json.load(config_path)
-            exp_name = config['exp_name']
-            # try:
-            #     config_path = open(os.path.join(root,'config.json'))
-            #     config = json.load(config_path)
-            #     if 'exp_name' in config:
-            #         if "apo" in config['exp_name']:
-            #             exp_name = "APO"
-            #         elif "trpofac" in config['exp_name']:
-            #             exp_name = "TRPO-FAC"
-            #         elif "trpoipo" in config['exp_name']:
-            #             exp_name = "TRPO-IPO"
-            #         elif "trpolag" in config['exp_name']:
-            #             exp_name = "TRPO-LAG"
-            #         elif "trpo" in config['exp_name']:
-            #             exp_name = "TRPO"
-            #         elif "ppo" in config['exp_name']:
-            #             exp_name = "PPO"
-            #         elif "a2c" in config['exp_name']:
-            #             exp_name = "A2C"
-            #         elif "pcpo" in config['exp_name']:
-            #             exp_name = "PCPO"
-            #         elif "scpo" in config['exp_name']:
-            #             exp_name = "SCPO"
-            #         elif "cpo" in config['exp_name']:
-            #             exp_name = "CPO"
-            #         elif "lpg" in config['exp_name']:
-            #             exp_name = "LPG"
-            #         elif "pdo" in config['exp_name']:
-            #             exp_name = "PDO"
-            #         elif "safelayer" in config['exp_name']:
-            #             exp_name = "SafeLayer"
-            #         elif "usl" in config['exp_name']:
-            #             exp_name = "USL"
-            #         else:
-            #             exp_name = "Unkonw"
-            # except:
-            #     print('No file named config.json')
+            exp_name = None
+            try:
+                config_path = open(os.path.join(root,'config.json'))
+                config = json.load(config_path)
+                if 'exp_name' in config:
+                    if "apo" in config['exp_name']:
+                        exp_name = "APO"
+                    elif "trpofac" in config['exp_name']:
+                        exp_name = "TRPO-FAC"
+                    elif "trpoipo" in config['exp_name']:
+                        exp_name = "TRPO-IPO"
+                    elif "trpolag" in config['exp_name']:
+                        exp_name = "TRPO-LAG"
+                    elif "trpo" in config['exp_name']:
+                        exp_name = "TRPO"
+                    elif "vmpo" in config['exp_name']:
+                        exp_name = "V-MPO"
+                    elif "espo" in config['exp_name']:
+                        exp_name = "ESPO"
+                    elif "alphappo" in config['exp_name']:
+                        exp_name = "Alpha-PPO"
+                    elif "ppo" in config['exp_name']:
+                        exp_name = "PPO"
+                    elif "a2c" in config['exp_name']:
+                        exp_name = "A2C"
+                    elif "pcpo" in config['exp_name']:
+                        exp_name = "PCPO"
+                    elif "scpo" in config['exp_name']:
+                        exp_name = "SCPO"
+                    elif "cpo" in config['exp_name']:
+                        exp_name = "CPO"
+                    elif "lpg" in config['exp_name']:
+                        exp_name = "LPG"
+                    elif "pdo" in config['exp_name']:
+                        exp_name = "PDO"
+                    elif "safelayer" in config['exp_name']:
+                        exp_name = "SafeLayer"
+                    elif "usl" in config['exp_name']:
+                        exp_name = "USL"
+                    else:
+                        exp_name = "Unkonw"
+                    
+            except:
+                print('No file named config.json')
             condition1 = condition or exp_name or 'exp'
             condition2 = condition1 + '-' + str(exp_idx)
             exp_idx += 1
@@ -163,7 +208,6 @@ def get_all_datasets(all_logdirs, legend=None, select=None, exclude=None):
             prefix = logdir.split(os.sep)[-1]
             listdir= os.listdir(basedir)
             logdirs += sorted([fulldir(x) for x in listdir if prefix in x])
-
     """
     Enforce selection rules, which check logdirs for certain substrings.
     Makes it easier to look at graphs from particular ablations, if you
@@ -173,7 +217,7 @@ def get_all_datasets(all_logdirs, legend=None, select=None, exclude=None):
         logdirs = [log for log in logdirs if all(x in log for x in select)]
     if exclude is not None:
         logdirs = [log for log in logdirs if all(not(x in log) for x in exclude)]
-
+   
     # Verify logdirs
     print('Plotting from...\n' + '='*DIV_LINE_WIDTH + '\n')
     for logdir in logdirs:
@@ -201,20 +245,20 @@ def make_plots(all_logdirs, legend=None, xaxis=None, values=[], count=False,
     # results_dir = osp.join(results_dir, title)
     data = get_all_datasets(all_logdirs, legend, select, exclude)
     # values = values if isinstance(values, list) else [values]
-    
+    # values = []
     if reward_flag:
         values.append('Reward_Performance')
     if cost_flag:
         values.append('Cost_Performance')
         values.append('Cost_Rate_Performance')
-    # import ipdb;ipdb.set_trace()
+    
     condition = 'Condition2' if count else 'Condition1'
     estimator = getattr(np, estimator)      # choose what to show on main curve: mean? max? min?
     for value in values:
         subdir = title + '/'
         plt.figure()
-        #try:
-        plot_data(data, xaxis=xaxis, value=value, condition=condition, smooth=smooth, estimator=estimator)
+        # try:
+        plot_data(data, title=all_logdirs[0], xaxis=xaxis, value=value, condition=condition, smooth=smooth, estimator=estimator)
         # except:
         #     print(f"this key {value} is not in the data")
         #     break
@@ -224,7 +268,7 @@ def make_plots(all_logdirs, legend=None, xaxis=None, values=[], count=False,
         if not existence:
             os.makedirs(final_dir)
         plt.show()
-        plt.savefig(final_dir + value, dpi=400, bbox_inches='tight')
+        plt.savefig(final_dir + f"{final_dir.split('/')[-2]}_{value}", dpi=100, bbox_inches='tight')
 
 
 def main():
@@ -237,7 +281,7 @@ def main():
                         help='the title for the saved plot')
     parser.add_argument('--legend', '-l', nargs='*')
     parser.add_argument('--xaxis', '-x', default='TotalEnvInteracts')
-    parser.add_argument('--value', '-y', default='Performance', nargs='*')
+    parser.add_argument('--value', '-y', default=[], nargs='*')
     parser.add_argument('--reward', action='store_true')
     parser.add_argument('--cost', action='store_true')
     parser.add_argument('--count', action='store_true')
