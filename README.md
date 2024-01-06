@@ -10,5 +10,3 @@ pip install -U "jax[cuda11_pip]" -f https://storage.googleapis.com/jax-releases/
 
 cd safe_rl_envs
 pip install -e.
-
-source ~/virtual_envs/guardx_yifan/bin/activate
