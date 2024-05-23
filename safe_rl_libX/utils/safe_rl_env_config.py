@@ -1,3 +1,8 @@
+import isaacgym
+import isaacgymenvs
+import gym
+import numpy as np
+import torch
 from safe_rl_envs.envs.engine import Engine as  safe_rl_envs_Engine
 
 def configuration_list(task):
@@ -2449,6 +2454,12 @@ def configuration_list(task):
             'robber3Ds_z_range': [0.5, 1.5],
         }
     
+    if task == "KukaTwoArms":
+        config = {
+            'task_name': 'AllegroKukaTwoArmsLSTM',
+            'IsaacGym':True,
+            'headless':True,
+        }
     
     
     return config
@@ -2485,5 +2496,40 @@ def create_env(args):
     config['env_num'] = args.env_num
     config['_seed'] = args.seed
     config['num_steps'] = args.max_ep_len
-    env = safe_rl_envs_Engine(config)
+    config['device'] = "cuda:0"
+    if "IsaacGym" in config.keys() and config["IsaacGym"] is True:
+        env = IsaacGymWrapper(config)
+    else:
+        env = safe_rl_envs_Engine(config)
+    
+    
     return env
+
+class IsaacGymWrapper(gym.Env):
+    def __init__(self, config={}):
+        self.env = isaacgymenvs.make(
+            seed=config['_seed'], 
+            task=config['task_name'], 
+            num_envs=config['env_num'], 
+            sim_device=config['device'],
+            graphics_device_id=0,
+            rl_device=config['device'],
+            headless = config['headless']
+        )
+        self.device = config['device']
+        self.observation_space = self.env.observation_space
+        self.action_space = self.env.action_space
+    
+    def reset(self):
+        obs_dict = self.env.reset()
+        return obs_dict["obs"]
+
+    def reset_done(self):
+        obs_dict, _ = self.env.reset_done()
+        return obs_dict["obs"]
+        
+    def step(self, action):
+        next_obs_dict, reward, done, info = self.env.step(action)
+        info["cost"] = torch.zeros(reward.shape, device=self.device, dtype=torch.float)
+        return next_obs_dict["obs"], reward, done, info
+    
