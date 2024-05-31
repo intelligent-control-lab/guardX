@@ -2454,9 +2454,114 @@ def configuration_list(task):
             'robber3Ds_z_range': [0.5, 1.5],
         }
     
-    if task == "KukaTwoArms":
+    if task == "AllegroHand":
+        config = {
+            'task_name': 'AllegroHand',
+            'IsaacGym':True,
+            'headless':True,
+        }
+        
+    if task == "AllegroHandDextremeADR":
+        config = {
+            'task_name': 'AllegroHandDextremeADR',
+            'IsaacGym':True,
+            'headless':False,
+        }
+    
+    if task == "AllegroKukaTwoArmsLSTM":
         config = {
             'task_name': 'AllegroKukaTwoArmsLSTM',
+            'IsaacGym':True,
+            'headless':True,
+        }
+        
+    if task == "AllegroKukaLSTM":
+        config = {
+            'task_name': 'AllegroKukaLSTM',
+            'IsaacGym':True,
+            'headless':True,
+        }
+    
+    if task == "Ant":
+        config = {
+            'task_name': 'Ant',
+            'IsaacGym':True,
+            'headless':True,
+        }
+    
+    if task == "Anymal":
+        config = {
+            'task_name': 'Anymal',
+            'IsaacGym':True,
+            'headless':True,
+        }
+        
+    if task == "AnymalTerrain":
+        config = {
+            'task_name': 'AnymalTerrain',
+            'IsaacGym':True,
+            'headless':True,
+        }
+    
+    if task == "BallBalance":
+        config = {
+            'task_name': 'BallBalance',
+            'IsaacGym':True,
+            'headless':True,
+        }
+    
+    if task == "Cartpole":
+        config = {
+            'task_name': 'Cartpole',
+            'IsaacGym':True,
+            'headless':True,
+        }
+    
+    if task == "FrankaCabinet":
+        config = {
+            'task_name': 'FrankaCabinet',
+            'IsaacGym':True,
+            'headless':True,
+        }
+    
+    if task == "Humanoid":
+        config = {
+            'task_name': 'Humanoid',
+            'IsaacGym':True,
+            'headless':True,
+        }
+        
+    if task == "Quadcopter":
+        config = {
+            'task_name': 'Quadcopter',
+            'IsaacGym':True,
+            'headless':True,
+        }
+    
+    if task == "ShadowHand":
+        config = {
+            'task_name': 'ShadowHand',
+            'IsaacGym':True,
+            'headless':True,
+        }
+    
+    if task == "ShadowHandOpenAI_FF":
+        config = {
+            'task_name': 'ShadowHandOpenAI_FF',
+            'IsaacGym':True,
+            'headless':True,
+        }
+    
+    if task == "ShadowHandOpenAI_LSTM":
+        config = {
+            'task_name': 'ShadowHandOpenAI_LSTM',
+            'IsaacGym':True,
+            'headless':True,
+        }
+    
+    if task == "Trifinger":
+        config = {
+            'task_name': 'Trifinger',
             'IsaacGym':True,
             'headless':True,
         }
@@ -2519,6 +2624,7 @@ class IsaacGymWrapper(gym.Env):
         self.device = config['device']
         self.observation_space = self.env.observation_space
         self.action_space = self.env.action_space
+        import ipdb;ipdb.set_trace()
     
     def reset(self):
         obs_dict = self.env.reset()

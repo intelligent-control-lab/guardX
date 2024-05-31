@@ -521,7 +521,7 @@ class AllegroHand(VecTask):
                                                          gymtorch.unwrap_tensor(goal_object_indices), len(env_ids))
         self.reset_goal_buf[env_ids] = 0
 
-    def reset_idx(self, env_ids, goal_env_ids):
+    def reset_idx(self, env_ids, goal_env_ids=torch.tensor([]).to(torch.int32)):
         # generate random values
         rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), self.num_shadow_hand_dofs * 2 + 5), device=self.device)
 

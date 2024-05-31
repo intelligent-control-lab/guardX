@@ -601,7 +601,7 @@ class ShadowHand(VecTask):
                                                          gymtorch.unwrap_tensor(goal_object_indices), len(env_ids))
         self.reset_goal_buf[env_ids] = 0
 
-    def reset_idx(self, env_ids, goal_env_ids):
+    def reset_idx(self, env_ids, goal_env_ids=torch.tensor([]).to(torch.int32)):
         # randomization can happen only at reset time, since it can reset actor positions on GPU
         if self.randomize:
             self.apply_randomizations(self.randomization_params)

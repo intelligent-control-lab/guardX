@@ -772,7 +772,7 @@ class AllegroHandDextreme(ADRVecTask):
 
 
 
-    def reset_idx(self, env_ids, goal_env_ids):
+    def reset_idx(self, env_ids, goal_env_ids=torch.tensor([]).to(torch.int32)):
 
         # generate random values
         rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), self.num_hand_dofs * 2 + 5), device=self.device)

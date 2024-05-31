@@ -28,4 +28,4 @@ pip install -e.
 
 # Example for IsaacGym environments KukaTwoArms
 cd safe_rl_libX/trpo
-python trpo.py --task KukaTwoArms --env_num 2000
+python3 trpo.py --task AllegroKukaTwoArmsLSTM --env_num 2000
