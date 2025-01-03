@@ -13,8 +13,8 @@ import numpy as np
 import torch
 import os.path as osp, time, atexit, os
 import warnings
-from utils.mpi_tools import proc_id, mpi_statistics_scalar
-from utils.serialization_utils import convert_json
+from guard_utils.mpi_tools import proc_id, mpi_statistics_scalar
+from guard_utils.serialization_utils import convert_json
 
 color2num = dict(
     gray=30,

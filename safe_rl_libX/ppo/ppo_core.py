@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.signal
-from gym.spaces import Box
-from gymnasium.spaces import Discrete
+from gym.spaces import Box as gym_Box
+from gymnasium.spaces import Discrete, Box
 
 import torch
 import torch.nn as nn
@@ -128,7 +128,8 @@ class MLPActorCritic(nn.Module):
         obs_dim = observation_space.shape[0]
 
         # policy builder depends on action space
-        if isinstance(action_space, Box):
+        if isinstance(action_space, Box) or isinstance(action_space, gym_Box):
+            print(obs_dim, action_space.shape[0])
             self.pi = MLPGaussianActor(obs_dim, action_space.shape[0], hidden_sizes, activation).to(self.device)
         elif isinstance(action_space, Discrete):
             self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation).to(self.device)

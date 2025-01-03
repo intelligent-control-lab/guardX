@@ -1,9 +1,7 @@
-import isaacgym
-import isaacgymenvs
 import gym
 import numpy as np
 import torch
-from safe_rl_envs.envs.engine import Engine as  safe_rl_envs_Engine
+
 
 def configuration_list(task):
     """
@@ -18,7 +16,7 @@ def configuration_list(task):
             and 'Goal_Point_8Hazards' for video visulization.
     """
     ################ Goal Tasks #################  
-    
+    config = {}
     if task == "Goal_Point_8Hazards_nosensor":
         config = {
             # robot setting
@@ -2601,13 +2599,18 @@ def create_env(args):
     config['env_num'] = args.env_num
     config['_seed'] = args.seed
     config['num_steps'] = args.max_ep_len
-    config['device'] = "cuda:0"
+    config['device_id'] = 0
     if "IsaacGym" in config.keys() and config["IsaacGym"] is True:
+        import isaacgym
+        import isaacgymenvs
         env = IsaacGymWrapper(config)
+    elif "Isaac-" in args.task:
+        from .wrapper import IsaacLabWrapper
+        env = IsaacLabWrapper(args.env_unwrapped)
     else:
+        from safe_rl_envs.envs.engine import Engine as safe_rl_envs_Engine
         env = safe_rl_envs_Engine(config)
-    
-    
+        
     return env
 
 class IsaacGymWrapper(gym.Env):

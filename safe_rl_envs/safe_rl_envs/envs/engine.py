@@ -211,6 +211,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
         # can't find it anywhere else, it's probably set via the config dict
         # and this parse function.
         self.parse(config)
+        gym.utils.EzPickle.__init__(self, config=config)
         self.body_name2xpos_id = {}
         self.key = jax.random.PRNGKey(self._seed) 
 
@@ -227,8 +228,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self.mj_model = mujoco.MjModel.from_xml_string(self.world.xml_string)
         self.mj_data = mujoco.MjData(self.mj_model) # Genearte Mujoco data from Mujoco model
         
-        self.mjx_model = device_put(self.mj_model, self.device_id) # Convert Mujoco model to MJX model for device acceleration
-        self.mjx_data = device_put(self.mj_data, self.device_id) # Convert Mujoco data to MJX data for device acceleration
+        self.mjx_model = mjx.put_model(self.mj_model) # Convert Mujoco model to MJX model for device acceleration
+        self.mjx_data = mjx.put_data(self.mjx_model, self.mj_data) # Convert Mujoco data to MJX data for device acceleration
         
         
         self.dt = self.mj_model.opt.timestep * self.physics_steps_per_control_step
@@ -488,8 +489,8 @@ class Engine(gym.Env, gym.utils.EzPickle):
         self._done = done
         self._info = info
         
-        self._done  = jp.where(self._steps > self.num_steps, x = 1.0, y = self._done)
-        self._steps = jp.where(self._done > 0.0, x = 0, y = self._steps + 1)
+        self._done  = jp.where(self._steps > self.num_steps, 1.0, self._done)
+        self._steps = jp.where(self._done > 0.0, 0, self._steps + 1)
         
         return jax_to_torch(self._obs), jax_to_torch(self._reward), jax_to_torch(self._done), jax_to_torch(self._info)
     
@@ -550,7 +551,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
             for other_name, other_xy in layout.items():
                 other_keepout = self.placements[other_name][1]
                 dist = jp.sqrt(jp.sum(jp.square(xy - other_xy)))
-                flag = jp.where(dist < other_keepout + self.placements_margin + keepout, x=0., y=flag)
+                flag = jp.where(dist < other_keepout + self.placements_margin + keepout, 0., flag)
             return flag
 
         layout = {}
@@ -562,12 +563,12 @@ class Engine(gym.Env, gym.utils.EzPickle):
                 rng, rng1 = jax.random.split(rng, 2)
                 cur_xy = self.draw_placement(placements, keepout, rng1)
                 flag = placement_is_valid(cur_xy, layout)
-                xy = jp.where(flag > 0., x=cur_xy, y=xy)
-                conflicted = jp.where(flag > 0., x=0., y=conflicted)
+                xy = jp.where(flag > 0., cur_xy, xy)
+                conflicted = jp.where(flag > 0., 0., conflicted)
             layout[name] = xy
-            success = jp.where(conflicted > 0., x=0., y=success) 
+            success = jp.where(conflicted > 0., 0., success) 
         dist_robot_goal = jp.sqrt(jp.sum(jp.square(layout['robot'][:2] - layout['goal'][:2]))) 
-        success = jp.where(dist_robot_goal < 3.0, x=0., y=success) 
+        success = jp.where(dist_robot_goal < 3.0, 0., success) 
         return layout, success
 
     def constrain_placement(self, placement, keepout):
@@ -692,10 +693,10 @@ class Engine(gym.Env, gym.utils.EzPickle):
         info = {}
         info['cost'] = cost
         info['obs'] = obs_dict
-        reward = jp.where(jp.isnan(obs).any() > 0, x = 0, y = reward)
-        done = jp.where(jp.isnan(obs).any() > 0, x = 1, y = done)
-        reward = jp.where(jp.isinf(obs).any() > 0, x = 0, y = reward)
-        done = jp.where(jp.isinf(obs).any() > 0, x = 1, y = done)
+        reward = jp.where(jp.isnan(obs).any() > 0, 0, reward)
+        done = jp.where(jp.isnan(obs).any() > 0, 1, done)
+        reward = jp.where(jp.isinf(obs).any() > 0, 0, reward)
+        done = jp.where(jp.isinf(obs).any() > 0, 1, done)
         return obs, reward, done, info, data
     
     def mjx_reset_done(self,
@@ -711,9 +712,9 @@ class Engine(gym.Env, gym.utils.EzPickle):
         qvel_reset = jp.zeros(self.mjx_model.nv)
         if done is not None:
             # fake one step forward to get xpos/observation for new initialized jpos
-            qpos = jp.where(done > 0.0, x = qpos_reset, y = data.qpos)
-            ctrl = jp.where(done > 0.0, x = ctrl_reset, y = data.ctrl)
-            qvel = jp.where(done > 0.0, x = qvel_reset, y = data.qvel)
+            qpos = jp.where(done > 0.0, qpos_reset, data.qpos)
+            ctrl = jp.where(done > 0.0, ctrl_reset, data.ctrl)
+            qvel = jp.where(done > 0.0, qvel_reset, data.qvel)
             data = data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
             def f(data, _):   
                 return (
@@ -725,7 +726,7 @@ class Engine(gym.Env, gym.utils.EzPickle):
             obs_reset, _ = self.obs(data_reset, None, None, None, None)
 
             # reset observation for done environment 
-            obs = jp.where(done > 0., x=obs_reset, y=obs)
+            obs = jp.where(done > 0., obs_reset, obs)
         
         return obs, data
 
@@ -791,13 +792,13 @@ class Engine(gym.Env, gym.utils.EzPickle):
         # upgrade last dist goal computation for auto reset 
         last_dist_goal = dist_goal
         if last_done is not None:
-            last_dist_goal = jp.where(last_done > 0.0, x = self.goal_pos(data), y = self.goal_pos(last_data))
+            last_dist_goal = jp.where(last_done > 0.0, self.goal_pos(data), self.goal_pos(last_data))
         d_dist = last_dist_goal - dist_goal
         reward = d_dist * self.reward_distance
-        done = jp.where(dist_goal < self.goal_size, x = 1.0, y = 0.0)
+        done = jp.where(dist_goal < self.goal_size, 1.0, 0.0)
         # filter the invalid simulation of the robot
-        done = jp.where(abs(d_dist) > 1.0, x = 1.0, y = done)
-        reward = jp.where(abs(d_dist) > 1.0, x = 0, y = reward)
+        done = jp.where(abs(d_dist) > 1.0, 1.0, done)
+        reward = jp.where(abs(d_dist) > 1.0, 0, reward)
         return reward, done
     
     def cost(self, data: mjx.Data) -> jp.ndarray:
@@ -907,9 +908,9 @@ class Engine(gym.Env, gym.utils.EzPickle):
         robot_pos_last = robot_pos
         robot_pos_last_last = robot_pos
         if last_done is not None:
-            robot_pos_last = jp.where(last_done > 0.0, x = robot_pos, y = last_data.xpos[self.body_name2xpos_id['robot'],:])
+            robot_pos_last = jp.where(last_done > 0.0, robot_pos, last_data.xpos[self.body_name2xpos_id['robot'],:])
             if last_last_done is not None:
-                robot_pos_last_last = jp.where(last_last_done + last_done > 0.0, x = robot_pos_last, y = last_last_data.xpos[self.body_name2xpos_id['robot'],:])
+                robot_pos_last_last = jp.where(last_last_done + last_done > 0.0, robot_pos_last, last_last_data.xpos[self.body_name2xpos_id['robot'],:])
         # current velocity
         pos_diff_vec_world_frame = robot_pos - robot_pos_last
         vel_vec_world_frame = pos_diff_vec_world_frame / self.dt

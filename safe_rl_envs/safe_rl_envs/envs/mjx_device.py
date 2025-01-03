@@ -80,10 +80,10 @@ _INVERSE_TRANSFORMS = {
     ),
 }
 
-_DERIVED = mesh.DERIVED.union(
-    # efc_J is dense in MJX, sparse in MJ. ignore for now.
-    {(types.Data, 'efc_J'), (types.Option, 'has_fluid_params')}
-)
+# _DERIVED = mesh.DERIVED.union(
+#     # efc_J is dense in MJX, sparse in MJ. ignore for now.
+#     {(types.Data, 'efc_J'), (types.Option, 'has_fluid_params')}
+# )
 import os
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE']='false'
 # os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='.20'
